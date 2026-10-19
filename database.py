@@ -2,6 +2,8 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+import shutil
+from datetime import timedelta
 
 DB_PATH = Path(__file__).resolve().parent / "clients.sqlite3"
 
@@ -41,6 +43,13 @@ def init_db():
                 ended_at TEXT
             )
         """)
+
+        # Indeksy
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_ip ON clients(ip)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_failure_client ON failure_history(client_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_failure_started ON failure_history(started_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_failure_open ON failure_history(client_id, ended_at)")
 
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -203,3 +212,27 @@ def get_failure_history_filtered(
             params + [limit]
         ).fetchall()
         return [dict(row) for row in rows]
+
+BACKUP_DIR = Path(__file__).resolve().parent / "backups"
+
+def backup_database():
+    """Tworzy kopię zapasową bazy."""
+    BACKUP_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = BACKUP_DIR / f"clients_{timestamp}.sqlite3"
+    shutil.copy2(DB_PATH, backup_path)
+    # Zostaw tylko ostatnie 14 kopii
+    backups = sorted(BACKUP_DIR.glob("clients_*.sqlite3"))
+    for old in backups[:-14]:
+        old.unlink(missing_ok=True)
+    return backup_path
+
+def cleanup_old_failures(days: int = 90):
+    """Usuwa awarie starsze niż podana liczba dni."""
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM failure_history WHERE started_at < ?",
+            (cutoff,)
+        )
+        return cursor.rowcount

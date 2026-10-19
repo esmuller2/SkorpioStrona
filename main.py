@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Request, Form
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -32,16 +32,13 @@ if not SECRET_KEY or not PASSWORD_HASH:
         "Ustaw je w pliku .env"
     )
 
-# Rate limiting
 login_attempts = defaultdict(list)
 MAX_ATTEMPTS = 5
-LOCK_TIME = 300  # 5 minut
+LOCK_TIME = 300
 
 def get_client_ip(request: Request) -> str:
-    """Bezpieczne pobranie IP klienta."""
     if request.client and request.client.host:
         return request.client.host
-    # Fallback na nagłówki (np. za reverse proxy)
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -61,7 +58,6 @@ def validate_csrf(request: Request, token: str) -> bool:
     expected = request.session.get("csrf_token")
     if not expected or not token or not secrets.compare_digest(expected, token):
         return False
-    # Jednorazowy token
     request.session.pop("csrf_token", None)
     return True
 
@@ -76,8 +72,24 @@ async def lifespan(app: FastAPI):
         id="status_refresh",
         replace_existing=True
     )
+    scheduler.add_job(
+        database.backup_database,
+        "cron",
+        hour=3,
+        minute=0,
+        id="daily_backup",
+        replace_existing=True
+    )
+    scheduler.add_job(
+        lambda: database.cleanup_old_failures(90),
+        "cron",
+        hour=3,
+        minute=30,
+        id="cleanup_failures",
+        replace_existing=True
+    )
     scheduler.start()
-    print("Scheduler uruchomiony (sprawdzanie statusów co 30 sekund)")
+    print("Scheduler uruchomiony (statusy co 30s, backup 03:00, czyszczenie 03:30)")
     yield
     scheduler.shutdown()
 
@@ -139,7 +151,6 @@ def login(
             }
         )
 
-    # Walidacja długości hasła
     if not password or len(password) > 128:
         login_attempts[client_ip].append(time.time())
         return templates.TemplateResponse(
@@ -341,6 +352,20 @@ def refresh_status(request: Request):
     status_checker.refresh_all_statuses()
     return RedirectResponse(url="/?msg=Statusy zostały odświeżone", status_code=303)
 
+@app.post("/backup-now")
+def backup_now(request: Request):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    path = database.backup_database()
+    return RedirectResponse(url=f"/?msg=Backup zapisany: {path.name}", status_code=303)
+
+@app.post("/cleanup-now")
+def cleanup_now(request: Request):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    deleted = database.cleanup_old_failures(90)
+    return RedirectResponse(url=f"/?msg=Usunięto {deleted} starych awarii", status_code=303)
+
 @app.get("/api/clients")
 def api_clients(
     request: Request,
@@ -365,3 +390,7 @@ def api_clients(
         "total_pages": total_pages,
         "total": total,
     }
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "time": datetime.now().isoformat()}

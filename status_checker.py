@@ -2,6 +2,8 @@ from datetime import datetime
 import logging
 import threading
 import time
+import json
+from pathlib import Path
 import database
 import huawei
 
@@ -10,15 +12,18 @@ logger = logging.getLogger(__name__)
 
 refresh_lock = threading.Lock()
 
-DEVICES = [
-    # {
-    #     "name": "Huawei-Core",
-    #     "host": "192.168.1.1",
-    #     "username": "admin",
-    #     "password": "haslo",
-    #     "port": 22,
-    # },
-]
+DEVICES_PATH = Path(__file__).resolve().parent / "devices.json"
+
+def load_devices() -> list[dict]:
+    if not DEVICES_PATH.exists():
+        return []
+    try:
+        with open(DEVICES_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.error(f"Błąd ładowania devices.json: {e}")
+        return []
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2
@@ -88,8 +93,9 @@ def refresh_all_statuses():
 
         arp_table: set[str] = get_local_arp()
 
-        if DEVICES:
-            for dev in DEVICES:
+        devices = load_devices()
+        if devices:
+            for dev in devices:
                 device_arp = get_arp_with_retry(dev)
                 arp_table.update(device_arp)
         else:
@@ -108,7 +114,6 @@ def refresh_all_statuses():
             in_arp = ip in arp_table
 
             if in_arp:
-                # Widoczny w sieci — aktualizujemy last_seen
                 database.update_last_seen(client_id, now)
                 if old_status == "error":
                     database.log_failure_end(client_id)
@@ -116,9 +121,7 @@ def refresh_all_statuses():
                 else:
                     database.update_client_status(client_id, "ok", last_seen=now)
             else:
-                # Nie ma w ARP
                 if old_status != "error":
-                    # Nowa awaria — startujemy od ostatniego momentu, kiedy był widoczny
                     start_time = last_seen if last_seen else now
                     database.log_failure_start(client_id, started_at=start_time)
                     database.update_client_status(client_id, "error", error_time=start_time)

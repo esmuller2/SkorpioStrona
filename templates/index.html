@@ -69,7 +69,7 @@
                 <td class="status-cell">
                     {% if client.status == "ok" %}
                         <span class="dot dot-ok"></span><span class="status-ok">OK</span>
-                        {% if client.ping_ms is not none %}<span class="ping">{{ client.ping_ms }} ms</span>{% endif %}
+                        {% if client.last_seen %}<span class="ping">ostatnio: {{ client.last_seen }}</span>{% endif %}
                     {% else %}
                         <span class="dot dot-error"></span><span class="status-error">Awaria</span>
                         {% if client.error_time %}<span class="ping">{{ client.error_time }}</span>{% endif %}
@@ -133,7 +133,6 @@
         updateClock();
         setInterval(updateClock, 1000);
 
-        // Auto-aktualizacja statusów co 8 sekund
         const params = new URLSearchParams(window.location.search);
         const page = params.get('page') || 1;
         const search = params.get('search') || '';
@@ -147,7 +146,6 @@
                 const data = await res.json();
                 if (data.error) return;
 
-                // Aktualizuj alert awarii
                 const alertContainer = document.getElementById('alert-container');
                 if (data.errors && data.errors.length > 0) {
                     let html = `<div class="alert"><strong>Awarie (${data.errors.length})</strong><div class="error-list">`;
@@ -163,7 +161,6 @@
                     alertContainer.innerHTML = '';
                 }
 
-                // Aktualizuj statusy w tabeli
                 data.clients.forEach(client => {
                     const row = document.querySelector(`tr[data-id="${client.client_id}"]`);
                     if (!row) return;
@@ -172,7 +169,7 @@
 
                     if (client.status === 'ok') {
                         cell.innerHTML = `<span class="dot dot-ok"></span><span class="status-ok">OK</span>` +
-                            (client.ping_ms != null ? `<span class="ping">${client.ping_ms} ms</span>` : '');
+                            (client.last_seen ? `<span class="ping">ostatnio: ${client.last_seen}</span>` : '');
                     } else {
                         cell.innerHTML = `<span class="dot dot-error"></span><span class="status-error">Awaria</span>` +
                             (client.error_time ? `<span class="ping">${client.error_time}</span>` : '');
