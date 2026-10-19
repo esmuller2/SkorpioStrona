@@ -1,0 +1,148 @@
+﻿<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Klienci</title>
+    <meta http-equiv="refresh" content="180">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Lista klientów</h1>
+            <div class="header-right">
+                <button class="theme-toggle" id="themeToggle" title="Tryb ciemny">🌙</button>
+                <span class="clock" id="clock">--:--:--</span>
+                <a href="/logout" class="logout">Wyloguj</a>
+            </div>
+        </div>
+
+        {% if msg %}<div class="msg-success">{{ msg }}</div>{% endif %}
+        {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
+
+        {% if errors %}
+        <div class="alert">
+            <strong>Awarie ({{ errors|length }})</strong>
+            <div class="error-list">
+                {% for err in errors[:12] %}
+                    <span class="error-item">{{ err.client_id }} <small>({{ err.ip }})</small></span>
+                {% endfor %}
+                {% if errors|length > 12 %}<span class="error-item">+{{ errors|length - 12 }}</span>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="controls">
+            <button onclick="location.reload()">Odśwież</button>
+            <form method="post" action="/refresh-status" style="display:inline;">
+                <button type="submit">Odśwież statusy</button>
+            </form>
+            <a href="/export" class="btn btn-success">Eksport CSV</a>
+
+            <form method="get" action="/" class="search-form" style="display:inline;">
+                <input type="text" name="search" placeholder="Szukaj ID..." value="{{ search }}">
+                {% if status_filter %}<input type="hidden" name="status_filter" value="{{ status_filter }}">{% endif %}
+                <button type="submit">Szukaj</button>
+            </form>
+
+            <a href="/?status_filter=error{% if search %}&search={{ search }}{% endif %}" class="btn {% if status_filter == 'error' %}btn-danger{% else %}btn-secondary{% endif %}">Awarie</a>
+            <a href="/?status_filter=ok{% if search %}&search={{ search }}{% endif %}" class="btn {% if status_filter == 'ok' %}btn-success{% else %}btn-secondary{% endif %}">OK</a>
+            <a href="/{% if search %}?search={{ search }}{% endif %}" class="btn btn-secondary">Wszystkie</a>
+        </div>
+
+        <form class="add-form" method="post" action="/add">
+            <input type="text" name="client_id" placeholder="ID Klienta" required>
+            <input type="text" name="ip" placeholder="Adres IP" required>
+            <button type="submit">Dodaj</button>
+        </form>
+
+        <p style="color:var(--muted); font-size:14px; margin-bottom:12px;">
+            {{ clients|length }} z {{ total }}
+            {% if search %} · „{{ search }}”{% endif %}
+            {% if status_filter %} · {{ status_filter }}{% endif %}
+            · <a href="/history">Historia awarii</a>
+        </p>
+
+        <table>
+            <tr>
+                <th>Lp.</th>
+                <th>ID</th>
+                <th>IP</th>
+                <th>Status</th>
+                <th>Akcje</th>
+            </tr>
+            {% for client in clients %}
+            <tr>
+                <td>{{ (page - 1) * 100 + loop.index }}</td>
+                <td>{{ client.client_id }}</td>
+                <td>{{ client.ip }}</td>
+                <td>
+                    {% if client.status == "ok" %}
+                        <span class="dot dot-ok"></span><span class="status-ok">OK</span>
+                        {% if client.ping_ms is not none %}<span class="ping">{{ client.ping_ms }} ms</span>{% endif %}
+                    {% else %}
+                        <span class="dot dot-error"></span><span class="status-error">Awaria</span>
+                        {% if client.error_time %}<span class="ping">{{ client.error_time }}</span>{% endif %}
+                    {% endif %}
+                </td>
+                <td>
+                    <form method="post" action="/edit" style="display:inline;">
+                        <input type="hidden" name="old_client_id" value="{{ client.client_id }}">
+                        <input type="text" name="new_client_id" value="{{ client.client_id }}" class="edit-input" required>
+                        <input type="text" name="new_ip" value="{{ client.ip }}" class="edit-input" required>
+                        <button type="submit" class="btn-warning">Zapisz</button>
+                    </form>
+                    <form method="post" action="/delete" style="display:inline; margin-left:6px;">
+                        <input type="hidden" name="client_id" value="{{ client.client_id }}">
+                        <button type="submit" class="btn-danger" onclick="return confirm('Usunąć?')">Usuń</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" style="text-align:center; color:var(--muted);">Brak klientów</td></tr>
+            {% endfor %}
+        </table>
+
+        {% if total_pages > 1 %}
+        <div class="pagination">
+            {% if page > 1 %}
+                <a href="/?page={{ page-1 }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}">«</a>
+            {% else %}<span class="disabled">«</span>{% endif %}
+            <span class="current">{{ page }} / {{ total_pages }}</span>
+            {% if page < total_pages %}
+                <a href="/?page={{ page+1 }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}">»</a>
+            {% else %}<span class="disabled">»</span>{% endif %}
+        </div>
+        {% endif %}
+
+        <p class="info">Statusy odświeżane co 3 minuty</p>
+    </div>
+
+    <script>
+        const toggle = document.getElementById('themeToggle');
+        const html = document.documentElement;
+        const saved = localStorage.getItem('theme') || 'light';
+        html.setAttribute('data-theme', saved);
+        toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+
+        toggle.addEventListener('click', () => {
+            const current = html.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+            toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+        });
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').textContent =
+                String(now.getHours()).padStart(2,'0') + ':' +
+                String(now.getMinutes()).padStart(2,'0') + ':' +
+                String(now.getSeconds()).padStart(2,'0');
+        }
+        updateClock();
+        setInterval(updateClock, 1000);
+    </script>
+</body>
+</html>

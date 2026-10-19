@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Historia awarii</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/history.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Historia awarii</h1>
+            <div>
+                <button class="theme-toggle" id="themeToggle" title="Tryb ciemny">🌙</button>
+                <a href="/" style="margin-left:12px;">← Wróć do listy</a>
+            </div>
+        </div>
+
+        <form class="filters" method="get" action="/history">
+            <input type="text" name="client_id" placeholder="ID klienta" value="{{ client_id }}">
+            <input type="date" name="date_from" value="{{ date_from }}">
+            <input type="date" name="date_to" value="{{ date_to }}">
+            <label>
+                <input type="checkbox" name="only_open" value="1" {% if only_open %}checked{% endif %}>
+                Tylko otwarte
+            </label>
+            <button type="submit">Filtruj</button>
+            <a href="/history">Wyczyść</a>
+        </form>
+
+        <p class="info">Znaleziono: {{ history|length }} wpisów</p>
+
+        <table>
+            <tr>
+                <th>ID Klienta</th>
+                <th>Początek</th>
+                <th>Koniec</th>
+                <th>Czas trwania</th>
+                <th>Status</th>
+            </tr>
+            {% for item in history %}
+            <tr>
+                <td>{{ item.client_id }}</td>
+                <td>{{ item.started_at }}</td>
+                <td>{{ item.ended_at or "—" }}</td>
+                <td>{{ item.duration }}</td>
+                <td>
+                    {% if item.ended_at %}
+                        <span class="closed">Zamknięta</span>
+                    {% else %}
+                        <span class="open">Trwa</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" style="text-align:center; color:var(--muted);">Brak wpisów</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <script>
+        const toggle = document.getElementById('themeToggle');
+        const html = document.documentElement;
+        const saved = localStorage.getItem('theme') || 'light';
+        html.setAttribute('data-theme', saved);
+        if (toggle) toggle.textContent = saved === 'dark' ? '☀️' : '🌙';
+
+        if (toggle) {
+            toggle.addEventListener('click', () => {
+                const current = html.getAttribute('data-theme');
+                const next = current === 'dark' ? 'light' : 'dark';
+                html.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                toggle.textContent = next === 'dark' ? '☀️' : '🌙';
+            });
+        }
+    </script>
+</body>
+</html>
