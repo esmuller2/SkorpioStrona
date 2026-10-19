@@ -23,12 +23,15 @@ def init_db():
                 ip TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'ok',
                 error_time TEXT,
-                ping_ms INTEGER
+                ping_ms INTEGER,
+                last_seen TEXT
             )
         """)
         columns = [row[1] for row in conn.execute("PRAGMA table_info(clients)").fetchall()]
         if "ping_ms" not in columns:
             conn.execute("ALTER TABLE clients ADD COLUMN ping_ms INTEGER")
+        if "last_seen" not in columns:
+            conn.execute("ALTER TABLE clients ADD COLUMN last_seen TEXT")
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS failure_history (
@@ -79,10 +82,11 @@ def get_all_clients():
 
 def add_client(client_id: str, ip: str, status: str = "ok") -> tuple[bool, str]:
     try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO clients (client_id, ip, status) VALUES (?, ?, ?)",
-                (client_id, ip, status)
+                "INSERT INTO clients (client_id, ip, status, last_seen) VALUES (?, ?, ?, ?)",
+                (client_id, ip, status, now)
             )
         return True, "Klient dodany"
     except sqlite3.IntegrityError:
@@ -108,16 +112,17 @@ def update_client(old_id: str, new_id: str, new_ip: str) -> tuple[bool, str]:
     except sqlite3.IntegrityError:
         return False, "Klient o nowym ID już istnieje"
 
-def update_client_status(client_id: str, status: str, error_time: str = None, ping_ms: int = None):
+def update_client_status(client_id: str, status: str, error_time: str = None, ping_ms: int = None, last_seen: str = None):
     with get_db() as conn:
         if status == "ok":
             conn.execute(
                 """
                 UPDATE clients
-                SET status = ?, error_time = NULL, ping_ms = COALESCE(?, ping_ms)
+                SET status = ?, error_time = NULL, ping_ms = COALESCE(?, ping_ms),
+                    last_seen = COALESCE(?, last_seen)
                 WHERE client_id = ?
                 """,
-                (status, ping_ms, client_id)
+                (status, ping_ms, last_seen, client_id)
             )
         else:
             conn.execute(
@@ -129,12 +134,20 @@ def update_client_status(client_id: str, status: str, error_time: str = None, pi
                 (status, error_time, client_id)
             )
 
-def log_failure_start(client_id: str):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def update_last_seen(client_id: str, last_seen: str):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE clients SET last_seen = ? WHERE client_id = ?",
+            (last_seen, client_id)
+        )
+
+def log_failure_start(client_id: str, started_at: str = None):
+    if not started_at:
+        started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         conn.execute(
             "INSERT INTO failure_history (client_id, started_at) VALUES (?, ?)",
-            (client_id, now)
+            (client_id, started_at)
         )
 
 def log_failure_end(client_id: str):

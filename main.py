@@ -7,7 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-import hashlib
+import bcrypt
 import os
 import ipaddress
 import time
@@ -18,7 +18,9 @@ from datetime import datetime
 import database
 import status_checker
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
+
+print("STARTUP HASH:", repr(os.getenv("ADMIN_PASSWORD_HASH")))
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -47,12 +49,12 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         status_checker.refresh_all_statuses,
         "interval",
-        minutes=3,
+        seconds=30,
         id="status_refresh",
         replace_existing=True
     )
     scheduler.start()
-    print("Scheduler uruchomiony (sprawdzanie statusów co 3 min)")
+    print("Scheduler uruchomiony (sprawdzanie statusów co 30 sekund)")
     yield
     scheduler.shutdown()
 
@@ -92,12 +94,23 @@ def login(request: Request, password: str = Form(...)):
             context={"error": "Zbyt wiele nieudanych prób. Spróbuj za 5 minut."}
         )
 
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
-    if password_hash == PASSWORD_HASH:
-        request.session["user"] = "admin"
-        login_attempts[client_ip].clear()
-        return RedirectResponse(url="/", status_code=303)
+    print("=== LOGIN DEBUG ===")
+    print("Hasło z formularza:", repr(password))
+    print("PASSWORD_HASH:", repr(PASSWORD_HASH))
 
+    try:
+        password_bytes = password.encode("utf-8")
+        hash_bytes = PASSWORD_HASH.encode("utf-8")
+        result = bcrypt.checkpw(password_bytes, hash_bytes)
+        print("bcrypt.checkpw wynik:", result)
+        if result:
+            request.session["user"] = "admin"
+            login_attempts[client_ip].clear()
+            return RedirectResponse(url="/", status_code=303)
+    except Exception as e:
+        print("WYJATEK:", type(e).__name__, e)
+
+    print("=== KONIEC DEBUG ===")
     login_attempts[client_ip].append(time.time())
     return templates.TemplateResponse(
         request=request,
@@ -274,3 +287,28 @@ def refresh_status(request: Request):
         return RedirectResponse(url="/login", status_code=303)
     status_checker.refresh_all_statuses()
     return RedirectResponse(url="/?msg=Statusy zostały odświeżone", status_code=303)
+
+@app.get("/api/clients")
+def api_clients(
+    request: Request,
+    page: int = 1,
+    search: str = None,
+    status_filter: str = None,
+):
+    if not get_current_user(request):
+        return {"error": "unauthorized"}
+
+    per_page = 100
+    clients, total = database.get_clients_paginated(search, page, per_page, status_filter)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+
+    errors = [c for c in clients if c["status"] == "error"]
+
+    return {
+        "clients": clients,
+        "errors": errors,
+        "page": page,
+        "total_pages": total_pages,
+        "total": total,
+    }

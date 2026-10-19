@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Klienci</title>
-    <meta http-equiv="refresh" content="180">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/index.css">
 </head>
@@ -21,17 +20,7 @@
         {% if msg %}<div class="msg-success">{{ msg }}</div>{% endif %}
         {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
 
-        {% if errors %}
-        <div class="alert">
-            <strong>Awarie ({{ errors|length }})</strong>
-            <div class="error-list">
-                {% for err in errors[:12] %}
-                    <span class="error-item">{{ err.client_id }} <small>({{ err.ip }})</small></span>
-                {% endfor %}
-                {% if errors|length > 12 %}<span class="error-item">+{{ errors|length - 12 }}</span>{% endif %}
-            </div>
-        </div>
-        {% endif %}
+        <div id="alert-container"></div>
 
         <div class="controls">
             <button onclick="location.reload()">Odśwież</button>
@@ -57,14 +46,14 @@
             <button type="submit">Dodaj</button>
         </form>
 
-        <p style="color:var(--muted); font-size:14px; margin-bottom:12px;">
+        <p id="summary" style="color:var(--muted); font-size:14px; margin-bottom:12px;">
             {{ clients|length }} z {{ total }}
             {% if search %} · „{{ search }}”{% endif %}
             {% if status_filter %} · {{ status_filter }}{% endif %}
             · <a href="/history">Historia awarii</a>
         </p>
 
-        <table>
+        <table id="clients-table">
             <tr>
                 <th>Lp.</th>
                 <th>ID</th>
@@ -73,11 +62,11 @@
                 <th>Akcje</th>
             </tr>
             {% for client in clients %}
-            <tr>
+            <tr data-id="{{ client.client_id }}">
                 <td>{{ (page - 1) * 100 + loop.index }}</td>
                 <td>{{ client.client_id }}</td>
                 <td>{{ client.ip }}</td>
-                <td>
+                <td class="status-cell">
                     {% if client.status == "ok" %}
                         <span class="dot dot-ok"></span><span class="status-ok">OK</span>
                         {% if client.ping_ms is not none %}<span class="ping">{{ client.ping_ms }} ms</span>{% endif %}
@@ -116,7 +105,7 @@
         </div>
         {% endif %}
 
-        <p class="info">Statusy odświeżane co 3 minuty</p>
+        <p class="info">Statusy odświeżane automatycznie co kilka sekund</p>
     </div>
 
     <script>
@@ -143,6 +132,59 @@
         }
         updateClock();
         setInterval(updateClock, 1000);
+
+        // Auto-aktualizacja statusów co 8 sekund
+        const params = new URLSearchParams(window.location.search);
+        const page = params.get('page') || 1;
+        const search = params.get('search') || '';
+        const statusFilter = params.get('status_filter') || '';
+
+        async function refreshStatuses() {
+            try {
+                const url = `/api/clients?page=${page}&search=${encodeURIComponent(search)}&status_filter=${encodeURIComponent(statusFilter)}`;
+                const res = await fetch(url);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.error) return;
+
+                // Aktualizuj alert awarii
+                const alertContainer = document.getElementById('alert-container');
+                if (data.errors && data.errors.length > 0) {
+                    let html = `<div class="alert"><strong>Awarie (${data.errors.length})</strong><div class="error-list">`;
+                    data.errors.slice(0, 12).forEach(err => {
+                        html += `<span class="error-item">${err.client_id} <small>(${err.ip})</small></span>`;
+                    });
+                    if (data.errors.length > 12) {
+                        html += `<span class="error-item">+${data.errors.length - 12}</span>`;
+                    }
+                    html += `</div></div>`;
+                    alertContainer.innerHTML = html;
+                } else {
+                    alertContainer.innerHTML = '';
+                }
+
+                // Aktualizuj statusy w tabeli
+                data.clients.forEach(client => {
+                    const row = document.querySelector(`tr[data-id="${client.client_id}"]`);
+                    if (!row) return;
+                    const cell = row.querySelector('.status-cell');
+                    if (!cell) return;
+
+                    if (client.status === 'ok') {
+                        cell.innerHTML = `<span class="dot dot-ok"></span><span class="status-ok">OK</span>` +
+                            (client.ping_ms != null ? `<span class="ping">${client.ping_ms} ms</span>` : '');
+                    } else {
+                        cell.innerHTML = `<span class="dot dot-error"></span><span class="status-error">Awaria</span>` +
+                            (client.error_time ? `<span class="ping">${client.error_time}</span>` : '');
+                    }
+                });
+            } catch (e) {
+                console.error('Błąd odświeżania:', e);
+            }
+        }
+
+        setInterval(refreshStatuses, 8000);
+        refreshStatuses();
     </script>
 </body>
 </html>
