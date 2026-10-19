@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +11,7 @@ import bcrypt
 import os
 import ipaddress
 import time
+import secrets
 from collections import defaultdict
 import csv
 import io
@@ -19,8 +20,6 @@ import database
 import status_checker
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
-
-print("STARTUP HASH:", repr(os.getenv("ADMIN_PASSWORD_HASH")))
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -33,14 +32,38 @@ if not SECRET_KEY or not PASSWORD_HASH:
         "Ustaw je w pliku .env"
     )
 
+# Rate limiting
 login_attempts = defaultdict(list)
 MAX_ATTEMPTS = 5
-LOCK_TIME = 300
+LOCK_TIME = 300  # 5 minut
+
+def get_client_ip(request: Request) -> str:
+    """Bezpieczne pobranie IP klienta."""
+    if request.client and request.client.host:
+        return request.client.host
+    # Fallback na nagłówki (np. za reverse proxy)
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return "unknown"
 
 def is_locked(ip: str) -> bool:
     now = time.time()
     login_attempts[ip] = [t for t in login_attempts[ip] if now - t < LOCK_TIME]
     return len(login_attempts[ip]) >= MAX_ATTEMPTS
+
+def generate_csrf_token(request: Request) -> str:
+    token = secrets.token_urlsafe(32)
+    request.session["csrf_token"] = token
+    return token
+
+def validate_csrf(request: Request, token: str) -> bool:
+    expected = request.session.get("csrf_token")
+    if not expected or not token or not secrets.compare_digest(expected, token):
+        return False
+    # Jednorazowy token
+    request.session.pop("csrf_token", None)
+    return True
 
 scheduler = BackgroundScheduler()
 
@@ -81,41 +104,71 @@ def get_current_user(request: Request):
 def login_page(request: Request):
     if get_current_user(request):
         return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse(request=request, name="login.html", context={})
+    csrf_token = generate_csrf_token(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"csrf_token": csrf_token}
+    )
 
 @app.post("/login")
-def login(request: Request, password: str = Form(...)):
-    client_ip = request.client.host or "unknown"
+def login(
+    request: Request,
+    password: str = Form(...),
+    csrf_token: str = Form(...)
+):
+    client_ip = get_client_ip(request)
 
     if is_locked(client_ip):
         return templates.TemplateResponse(
             request=request,
             name="login.html",
-            context={"error": "Zbyt wiele nieudanych prób. Spróbuj za 5 minut."}
+            context={
+                "error": "Zbyt wiele nieudanych prób. Spróbuj za 5 minut.",
+                "csrf_token": generate_csrf_token(request)
+            }
         )
 
-    print("=== LOGIN DEBUG ===")
-    print("Hasło z formularza:", repr(password))
-    print("PASSWORD_HASH:", repr(PASSWORD_HASH))
+    if not validate_csrf(request, csrf_token):
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={
+                "error": "Nieprawidłowy token bezpieczeństwa. Odśwież stronę.",
+                "csrf_token": generate_csrf_token(request)
+            }
+        )
+
+    # Walidacja długości hasła
+    if not password or len(password) > 128:
+        login_attempts[client_ip].append(time.time())
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={
+                "error": "Nieprawidłowe hasło",
+                "csrf_token": generate_csrf_token(request)
+            }
+        )
 
     try:
         password_bytes = password.encode("utf-8")
-        hash_bytes = PASSWORD_HASH.encode("utf-8")
-        result = bcrypt.checkpw(password_bytes, hash_bytes)
-        print("bcrypt.checkpw wynik:", result)
-        if result:
+        hash_bytes = PASSWORD_HASH.strip().strip('"').strip("'").encode("utf-8")
+        if bcrypt.checkpw(password_bytes, hash_bytes):
             request.session["user"] = "admin"
             login_attempts[client_ip].clear()
             return RedirectResponse(url="/", status_code=303)
-    except Exception as e:
-        print("WYJATEK:", type(e).__name__, e)
+    except Exception:
+        pass
 
-    print("=== KONIEC DEBUG ===")
     login_attempts[client_ip].append(time.time())
     return templates.TemplateResponse(
         request=request,
         name="login.html",
-        context={"error": "Nieprawidłowe hasło"}
+        context={
+            "error": "Nieprawidłowe hasło",
+            "csrf_token": generate_csrf_token(request)
+        }
     )
 
 @app.get("/logout")
@@ -241,7 +294,7 @@ def add_client(request: Request, client_id: str = Form(...), ip: str = Form(...)
     client_id = client_id.strip()
     ip = ip.strip()
 
-    if not client_id or len(client_id) > 50:
+    if not client_id or len(client_id) > 50 or len(client_id) < 1:
         return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
     try:
         ipaddress.ip_address(ip)
@@ -271,7 +324,7 @@ def edit_client(
     new_client_id = new_client_id.strip()
     new_ip = new_ip.strip()
 
-    if not new_client_id or len(new_client_id) > 50:
+    if not new_client_id or len(new_client_id) > 50 or len(new_client_id) < 1:
         return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
     try:
         ipaddress.ip_address(new_ip)
