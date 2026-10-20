@@ -7,6 +7,14 @@ import shutil
 DB_PATH = Path(__file__).resolve().parent / "clients.sqlite3"
 BACKUP_DIR = Path(__file__).resolve().parent / "backups"
 
+def _safe_parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
 @contextmanager
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -157,10 +165,18 @@ def log_failure_start(client_id: str, started_at: str = None):
     if not started_at:
         started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
+        # Sprawdź czy już jest otwarta awaria dla tego klienta
+        existing = conn.execute(
+            "SELECT id FROM failure_history WHERE client_id = ? AND ended_at IS NULL LIMIT 1",
+            (client_id,)
+        ).fetchone()
+        if existing:
+            return  # już otwarta — nie dodawaj kolejnej
         conn.execute(
             "INSERT INTO failure_history (client_id, started_at) VALUES (?, ?)",
             (client_id, started_at)
         )
+        conn.commit()
 
 def log_failure_end(client_id: str):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -184,37 +200,50 @@ def get_failure_history_filtered(
     date_from: str = None,
     date_to: str = None,
     only_open: bool = False,
-    limit: int = 200
+    limit: int = 300,
 ):
     with get_db() as conn:
-        conditions = []
+        query = "SELECT * FROM failure_history"
         params = []
+        conditions = []
 
         if client_id:
-            escaped = _escape_like(client_id.strip())
-            conditions.append("client_id LIKE ? ESCAPE '\\'")
-            params.append(f"%{escaped}%")
+            conditions.append("client_id = ?")
+            params.append(client_id)
         if date_from:
             conditions.append("started_at >= ?")
-            params.append(date_from)
+            params.append(date_from + " 00:00:00")
         if date_to:
             conditions.append("started_at <= ?")
             params.append(date_to + " 23:59:59")
         if only_open:
             conditions.append("ended_at IS NULL")
 
-        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY started_at DESC LIMIT ?"
+        params.append(limit)
 
-        rows = conn.execute(
-            f"""
-            SELECT * FROM failure_history
-            {where}
-            ORDER BY started_at DESC
-            LIMIT ?
-            """,
-            params + [limit]
-        ).fetchall()
-        return [dict(row) for row in rows]
+        rows = conn.execute(query, params).fetchall()
+        history = [dict(row) for row in rows]
+
+    for item in history:
+        start = _safe_parse_datetime(item.get("started_at"))
+        end = _safe_parse_datetime(item.get("ended_at"))
+        if start and end and end >= start:
+            minutes = int((end - start).total_seconds() // 60)
+            hours = minutes // 60
+            mins = minutes % 60
+            if hours > 0 and mins > 0:
+                item["duration"] = f"{hours} godz {mins} min"
+            elif hours > 0:
+                item["duration"] = f"{hours} godz"
+            else:
+                item["duration"] = f"{mins} min"
+        else:
+            item["duration"] = "trwa" if not item.get("ended_at") else "—"
+
+    return history
 
 def get_overnight_failures(date_from: str = None, date_to: str = None):
     """Awarie, które przecinają się z oknem 17:00–09:00 w wybranym zakresie dat."""
@@ -223,13 +252,10 @@ def get_overnight_failures(date_from: str = None, date_to: str = None):
         params = []
         conditions = []
 
-        # Filtruj po czasie trwania awarii, nie tylko po starcie
         if date_from:
-            # Awaria musi kończyć się po dacie "od" (lub trwać)
             conditions.append("(ended_at IS NULL OR ended_at >= ?)")
             params.append(date_from + " 00:00:00")
         if date_to:
-            # Awaria musi zaczynać się przed końcem daty "do"
             conditions.append("started_at <= ?")
             params.append(date_to + " 23:59:59")
 
@@ -242,14 +268,51 @@ def get_overnight_failures(date_from: str = None, date_to: str = None):
         result = []
         for row in rows:
             item = dict(row)
-            start = datetime.strptime(item["started_at"], "%Y-%m-%d %H:%M:%S")
-            end = datetime.strptime(item["ended_at"], "%Y-%m-%d %H:%M:%S") if item["ended_at"] else datetime.now()
+            start = _safe_parse_datetime(item.get("started_at"))
+            if not start:
+                continue
+            end = _safe_parse_datetime(item.get("ended_at")) or datetime.now()
 
-            if _overlaps_night(start, end):
-                result.append(item)
+            # Sprawdź czy przecina noc W WYBRANYM ZAKRESIE
+            if not _overlaps_night_in_range(start, end, date_from, date_to):
+                continue
+
+            # Czas trwania (ochrona przed ujemnym)
+            if item.get("ended_at"):
+                end_dt = _safe_parse_datetime(item.get("ended_at"))
+                if end_dt and end_dt >= start:
+                    minutes = int((end_dt - start).total_seconds() // 60)
+                    hours = minutes // 60
+                    mins = minutes % 60
+                    if hours > 0 and mins > 0:
+                        item["duration"] = f"{hours} godz {mins} min"
+                    elif hours > 0:
+                        item["duration"] = f"{hours} godz"
+                    else:
+                        item["duration"] = f"{mins} min"
+                else:
+                    item["duration"] = "—"
+            else:
+                item["duration"] = "trwa"
+
+            result.append(item)
             if len(result) >= 500:
                 break
         return result
+
+
+def _overlaps_night_in_range(start: datetime, end: datetime, date_from: str | None, date_to: str | None) -> bool:
+    """Czy awaria przecina okno 17:00–09:00 w podanym zakresie dat."""
+    # Ogranicz start/end do zakresu filtrów
+    range_start = datetime.strptime(date_from, "%Y-%m-%d") if date_from else start
+    range_end = datetime.strptime(date_to + " 23:59:59", "%Y-%m-%d %H:%M:%S") if date_to else end
+
+    check_start = max(start, range_start)
+    check_end = min(end, range_end)
+    if check_start >= check_end:
+        return False
+
+    return _overlaps_night(check_start, check_end)
 
 def _overlaps_night(start: datetime, end: datetime) -> bool:
     """Czy przedział przecina się z jakimkolwiek oknem 17:00–09:00."""

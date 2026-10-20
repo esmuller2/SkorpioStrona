@@ -29,7 +29,6 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 def get_arp_with_retry(dev: dict) -> set[str] | None:
-    """Zwraca zbiór IP lub None przy całkowitym niepowodzeniu."""
     name = dev.get("name", dev["host"])
     port = dev.get("port", 22)
     for attempt in range(1, MAX_RETRIES + 1):
@@ -56,7 +55,6 @@ def get_arp_with_retry(dev: dict) -> set[str] | None:
     return None
 
 def get_local_arp() -> set[str] | None:
-    """Zwraca zbiór IP lub None przy błędzie odczytu."""
     import subprocess
     import platform
     import re
@@ -95,40 +93,35 @@ def refresh_all_statuses():
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         arp_table: set[str] = set()
-        local_ok = False
-        ssh_ok = False
+        devices = load_devices()
+        ssh_ok = True
 
-        # Lokalny ARP
+        # Lokalny ARP tylko jako uzupełnienie
         local_arp = get_local_arp()
         if local_arp is not None:
             arp_table.update(local_arp)
-            local_ok = True
-            logger.info(f"Lokalny ARP: {len(local_arp)} wpisów")
-        else:
-            logger.warning("Nie udało się odczytać lokalnego ARP")
 
-        # Urządzenia SSH — zawsze próbujemy
-        devices = load_devices()
+        # Wszystkie urządzenia SSH muszą odpowiedzieć
         if devices:
             for dev in devices:
                 device_arp = get_arp_with_retry(dev)
-                if device_arp is not None:
-                    arp_table.update(device_arp)
-                    ssh_ok = True
-                    logger.info(f"SSH {dev.get('name', dev['host'])}: {len(device_arp)} wpisów")
-                else:
-                    logger.warning(f"Urządzenie {dev.get('name', dev['host'])} nie odpowiedziało")
+                if device_arp is None:
+                    logger.error(f"Urządzenie {dev.get('name', dev['host'])} nie odpowiedziało — pomijam całą aktualizację")
+                    ssh_ok = False
+                    break
+                arp_table.update(device_arp)
         else:
-            logger.info("Brak urządzeń SSH")
+            logger.info("Brak urządzeń SSH — używam tylko lokalnego ARP")
 
-        # Nie aktualizuj statusów, jeśli nie mamy żadnych danych
-        if not local_ok and not ssh_ok:
-            logger.error("Brak jakichkolwiek danych ARP — pomijam aktualizację statusów")
+        if not ssh_ok:
             return
 
-        # Dodatkowa ochrona: jeśli mamy tylko lokalny ARP i jest on bardzo mały
-        if local_ok and not ssh_ok and len(arp_table) < 3:
-            logger.warning(f"Tylko lokalny ARP z {len(arp_table)} wpisami — pomijam aktualizację (ryzyko fałszywych awarii)")
+        if not devices and (local_arp is None or len(local_arp) < 3):
+            logger.warning("Brak urządzeń SSH i słaby lokalny ARP — pomijam aktualizację")
+            return
+
+        if not arp_table:
+            logger.error("Brak jakichkolwiek danych ARP — pomijam aktualizację")
             return
 
         logger.info(f"Łącznie wpisów ARP: {len(arp_table)}")

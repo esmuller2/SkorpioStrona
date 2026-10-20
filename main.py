@@ -101,7 +101,7 @@ app.add_middleware(
     session_cookie="session",
     max_age=60 * 60 * 8,
     same_site="lax",
-    https_only=False,
+    https_only=os.getenv("HTTPS_ONLY", "false").lower() == "true",
 )
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "templates" / "static")), name="static")

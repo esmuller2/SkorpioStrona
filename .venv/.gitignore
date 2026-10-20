@@ -1,11 +1,27 @@
-.venv/
-__pycache__/
-*.pyc
-*.pyo
+# Secrets
+.env
+.env.*
+
+# Databases
 *.sqlite3
 *.db
-.env
-devices.json
-*.log
+clients.sqlite3
+clients.db
+
+# Backups
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE
 .idea/
 .vscode/
+
+# Logs
+*.log

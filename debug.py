@@ -1,19 +1,9 @@
+from pathlib import Path
 from dotenv import load_dotenv
 import os
-import bcrypt
 
-load_dotenv()
-h = os.getenv("ADMIN_PASSWORD_HASH")
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
 
-print("HASH:", repr(h))
-print("DLUGOSC:", len(h) if h else 0)
-print("ZACZYNA SIE OD $2b$:", h.startswith("$2b$") if h else False)
-
-if h:
-    try:
-        ok = bcrypt.checkpw(b"admin123", h.encode())
-        print("HASLO admin123 DZIALA:", ok)
-    except Exception as e:
-        print("BLAD:", e)
-else:
-    print("BRAK HASHA")
+print("APP_SECRET ustawiony:", bool(os.getenv("APP_SECRET")))
+print("ADMIN_PASSWORD_HASH ustawiony:", bool(os.getenv("ADMIN_PASSWORD_HASH")))
+print("Długość hasha:", len(os.getenv("ADMIN_PASSWORD_HASH") or ""))
