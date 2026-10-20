@@ -200,9 +200,11 @@ def home(
         return RedirectResponse(url="/login", status_code=303)
 
     per_page = 100
-    clients, total = database.get_clients_paginated(search, page, per_page, status_filter)
+    _, total = database.get_clients_paginated(search, 1, 1, status_filter)
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = max(1, min(page, total_pages))
+
+    clients, _ = database.get_clients_paginated(search, page, per_page, status_filter)
     errors = [c for c in clients if c["status"] == "error"]
 
     return templates.TemplateResponse(
@@ -252,25 +254,6 @@ def history_page(
         limit=300
     )
 
-    for item in history:
-        if item["ended_at"]:
-            try:
-                start = datetime.strptime(item["started_at"], "%Y-%m-%d %H:%M:%S")
-                end = datetime.strptime(item["ended_at"], "%Y-%m-%d %H:%M:%S")
-                minutes = int((end - start).total_seconds() // 60)
-                hours = minutes // 60
-                mins = minutes % 60
-                if hours > 0 and mins > 0:
-                    item["duration"] = f"{hours} godz {mins} min"
-                elif hours > 0:
-                    item["duration"] = f"{hours} godz"
-                else:
-                    item["duration"] = f"{mins} min"
-            except Exception:
-                item["duration"] = "—"
-        else:
-            item["duration"] = "trwa"
-
     return templates.TemplateResponse(
         request=request,
         name="history.html",
@@ -310,25 +293,6 @@ def overnight_page(
         date_from=valid_date(date_from),
         date_to=valid_date(date_to)
     )
-
-    for item in history:
-        if item["ended_at"]:
-            try:
-                start = datetime.strptime(item["started_at"], "%Y-%m-%d %H:%M:%S")
-                end = datetime.strptime(item["ended_at"], "%Y-%m-%d %H:%M:%S")
-                minutes = int((end - start).total_seconds() // 60)
-                hours = minutes // 60
-                mins = minutes % 60
-                if hours > 0 and mins > 0:
-                    item["duration"] = f"{hours} godz {mins} min"
-                elif hours > 0:
-                    item["duration"] = f"{hours} godz"
-                else:
-                    item["duration"] = f"{mins} min"
-            except Exception:
-                item["duration"] = "—"
-        else:
-            item["duration"] = "trwa"
 
     return templates.TemplateResponse(
         request=request,
@@ -396,11 +360,11 @@ def add_client(
 def delete_client(
     request: Request,
     client_id: str = Form(...),
-    csrf_token: str | None = Form(None)
+    csrf_token: str = Form(...)
 ):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
-    if not csrf_token or not validate_csrf(request, csrf_token):
+    if not validate_csrf(request, csrf_token):
         return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
     success, message = database.delete_client(client_id)
     return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
@@ -482,10 +446,11 @@ def api_clients(
         return {"error": "unauthorized"}
 
     per_page = 100
-    clients, total = database.get_clients_paginated(search, page, per_page, status_filter)
+    _, total = database.get_clients_paginated(search, 1, 1, status_filter)
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = max(1, min(page, total_pages))
 
+    clients, _ = database.get_clients_paginated(search, page, per_page, status_filter)
     errors = [c for c in clients if c["status"] == "error"]
 
     return {

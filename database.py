@@ -1,29 +1,16 @@
 import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timedelta
 from pathlib import Path
+from datetime import datetime, timedelta
 import shutil
+import os
 
 DB_PATH = Path(__file__).resolve().parent / "clients.sqlite3"
 BACKUP_DIR = Path(__file__).resolve().parent / "backups"
 
-def _safe_parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return None
-
-@contextmanager
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+    return conn
 
 def init_db():
     with get_db() as conn:
@@ -37,12 +24,6 @@ def init_db():
                 last_seen TEXT
             )
         """)
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(clients)").fetchall()]
-        if "ping_ms" not in columns:
-            conn.execute("ALTER TABLE clients ADD COLUMN ping_ms INTEGER")
-        if "last_seen" not in columns:
-            conn.execute("ALTER TABLE clients ADD COLUMN last_seen TEXT")
-
         conn.execute("""
             CREATE TABLE IF NOT EXISTS failure_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,127 +32,115 @@ def init_db():
                 ended_at TEXT
             )
         """)
-
         conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_ip ON clients(ip)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_failure_client ON failure_history(client_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_failure_started ON failure_history(started_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_failure_open ON failure_history(client_id, ended_at)")
+        conn.commit()
 
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-def get_clients_paginated(search: str = None, page: int = 1, per_page: int = 100, status_filter: str = None):
-    offset = (page - 1) * per_page
-    with get_db() as conn:
-        conditions = []
-        params = []
-
-        if search:
-            escaped = _escape_like(search.strip())
-            conditions.append("client_id LIKE ? ESCAPE '\\'")
-            params.append(f"%{escaped}%")
-        if status_filter in ("ok", "error"):
-            conditions.append("status = ?")
-            params.append(status_filter)
-
-        where = "WHERE " + " AND ".join(conditions) if conditions else ""
-
-        total = conn.execute(f"SELECT COUNT(*) FROM clients {where}", params).fetchone()[0]
-        rows = conn.execute(
-            f"""
-            SELECT * FROM clients
-            {where}
-            ORDER BY CASE WHEN status = 'error' THEN 0 ELSE 1 END, client_id
-            LIMIT ? OFFSET ?
-            """,
-            params + [per_page, offset]
-        ).fetchall()
-        return [dict(row) for row in rows], total
+def _safe_parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
 
 def get_all_clients():
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM clients ORDER BY CASE WHEN status = 'error' THEN 0 ELSE 1 END, client_id"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM clients ORDER BY client_id").fetchall()
         return [dict(row) for row in rows]
 
-def add_client(client_id: str, ip: str, status: str = "ok") -> tuple[bool, str]:
-    try:
-        with get_db() as conn:
+def get_clients_paginated(search: str = None, page: int = 1, per_page: int = 100, status_filter: str = None):
+    with get_db() as conn:
+        query = "SELECT * FROM clients"
+        count_query = "SELECT COUNT(*) FROM clients"
+        params = []
+        conditions = []
+
+        if search:
+            conditions.append("client_id LIKE ?")
+            params.append(f"%{search}%")
+        if status_filter:
+            conditions.append("status = ?")
+            params.append(status_filter)
+
+        if conditions:
+            where = " WHERE " + " AND ".join(conditions)
+            query += where
+            count_query += where
+
+        total = conn.execute(count_query, params).fetchone()[0]
+
+        query += " ORDER BY client_id LIMIT ? OFFSET ?"
+        offset = (page - 1) * per_page
+        rows = conn.execute(query, params + [per_page, offset]).fetchall()
+        return [dict(row) for row in rows], total
+
+def add_client(client_id: str, ip: str, status: str = "ok"):
+    with get_db() as conn:
+        try:
             conn.execute(
-                "INSERT INTO clients (client_id, ip, status, last_seen) VALUES (?, ?, ?, NULL)",
+                "INSERT INTO clients (client_id, ip, status) VALUES (?, ?, ?)",
                 (client_id, ip, status)
             )
-        return True, "Klient dodany"
-    except sqlite3.IntegrityError:
-        return False, "Klient o tym ID już istnieje"
+            conn.commit()
+            return True, "Klient dodany"
+        except sqlite3.IntegrityError:
+            return False, "Klient o tym ID już istnieje"
 
-def delete_client(client_id: str) -> tuple[bool, str]:
+def delete_client(client_id: str):
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM clients WHERE client_id = ?", (client_id,))
-        if cursor.rowcount == 0:
-            return False, "Nie znaleziono klienta"
+        conn.execute("DELETE FROM clients WHERE client_id = ?", (client_id,))
+        conn.execute("DELETE FROM failure_history WHERE client_id = ?", (client_id,))
+        conn.commit()
         return True, "Klient usunięty"
 
-def update_client(old_id: str, new_id: str, new_ip: str) -> tuple[bool, str]:
-    try:
-        with get_db() as conn:
-            cursor = conn.execute(
+def update_client(old_id: str, new_id: str, new_ip: str):
+    with get_db() as conn:
+        try:
+            conn.execute(
                 "UPDATE clients SET client_id = ?, ip = ? WHERE client_id = ?",
                 (new_id, new_ip, old_id)
             )
-            if cursor.rowcount == 0:
-                return False, "Nie znaleziono klienta"
-            # Aktualizuj historię awarii
             conn.execute(
                 "UPDATE failure_history SET client_id = ? WHERE client_id = ?",
                 (new_id, old_id)
             )
-        return True, "Klient zaktualizowany"
-    except sqlite3.IntegrityError:
-        return False, "Klient o nowym ID już istnieje"
+            conn.commit()
+            return True, "Klient zaktualizowany"
+        except sqlite3.IntegrityError:
+            return False, "Nowe ID już istnieje"
 
-def update_client_status(client_id: str, status: str, error_time: str = None, ping_ms: int = None, last_seen: str = None):
+def update_client_status(client_id: str, status: str, error_time: str = None, last_seen: str = None):
     with get_db() as conn:
-        if status == "ok":
+        if status == "error":
             conn.execute(
-                """
-                UPDATE clients
-                SET status = ?, error_time = NULL, ping_ms = COALESCE(?, ping_ms),
-                    last_seen = COALESCE(?, last_seen)
-                WHERE client_id = ?
-                """,
-                (status, ping_ms, last_seen, client_id)
+                "UPDATE clients SET status = ?, error_time = ? WHERE client_id = ?",
+                (status, error_time, client_id)
             )
         else:
             conn.execute(
-                """
-                UPDATE clients
-                SET status = ?, error_time = COALESCE(?, error_time)
-                WHERE client_id = ?
-                """,
-                (status, error_time, client_id)
+                "UPDATE clients SET status = ?, error_time = NULL, last_seen = COALESCE(?, last_seen) WHERE client_id = ?",
+                (status, last_seen, client_id)
             )
+        conn.commit()
 
-def update_last_seen(client_id: str, last_seen: str):
+def update_last_seen(client_id: str, when: str):
     with get_db() as conn:
-        conn.execute(
-            "UPDATE clients SET last_seen = ? WHERE client_id = ?",
-            (last_seen, client_id)
-        )
+        conn.execute("UPDATE clients SET last_seen = ? WHERE client_id = ?", (when, client_id))
+        conn.commit()
 
 def log_failure_start(client_id: str, started_at: str = None):
     if not started_at:
         started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
-        # Sprawdź czy już jest otwarta awaria dla tego klienta
         existing = conn.execute(
             "SELECT id FROM failure_history WHERE client_id = ? AND ended_at IS NULL LIMIT 1",
             (client_id,)
         ).fetchone()
         if existing:
-            return  # już otwarta — nie dodawaj kolejnej
+            return
         conn.execute(
             "INSERT INTO failure_history (client_id, started_at) VALUES (?, ?)",
             (client_id, started_at)
@@ -179,21 +148,15 @@ def log_failure_start(client_id: str, started_at: str = None):
         conn.commit()
 
 def log_failure_end(client_id: str):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ended_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         conn.execute(
-            """
-            UPDATE failure_history
-            SET ended_at = ?
-            WHERE id = (
-                SELECT id FROM failure_history
-                WHERE client_id = ? AND ended_at IS NULL
-                ORDER BY started_at DESC
-                LIMIT 1
-            )
-            """,
-            (now, client_id)
+            """UPDATE failure_history SET ended_at = ?
+               WHERE client_id = ? AND ended_at IS NULL
+               ORDER BY started_at DESC LIMIT 1""",
+            (ended_at, client_id)
         )
+        conn.commit()
 
 def get_failure_history_filtered(
     client_id: str = None,
@@ -245,8 +208,31 @@ def get_failure_history_filtered(
 
     return history
 
+def _overlaps_night(start: datetime, end: datetime) -> bool:
+    """Czy przedział [start, end] przecina się z 17:00–09:00."""
+    current = start
+    while current < end:
+        day_start = current.replace(hour=17, minute=0, second=0, microsecond=0)
+        if current.hour < 9:
+            day_start = (current - timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
+        night_end = day_start + timedelta(hours=16)  # 17:00 + 16h = 09:00 next day
+        if current < night_end and end > day_start:
+            return True
+        current = night_end
+        if current <= start:
+            current += timedelta(days=1)
+    return False
+
+def _overlaps_night_in_range(start: datetime, end: datetime, date_from: str | None, date_to: str | None) -> bool:
+    range_start = datetime.strptime(date_from, "%Y-%m-%d") if date_from else start
+    range_end = datetime.strptime(date_to + " 23:59:59", "%Y-%m-%d %H:%M:%S") if date_to else end
+    check_start = max(start, range_start)
+    check_end = min(end, range_end)
+    if check_start >= check_end:
+        return False
+    return _overlaps_night(check_start, check_end)
+
 def get_overnight_failures(date_from: str = None, date_to: str = None):
-    """Awarie, które przecinają się z oknem 17:00–09:00 w wybranym zakresie dat."""
     with get_db() as conn:
         query = "SELECT * FROM failure_history"
         params = []
@@ -261,7 +247,7 @@ def get_overnight_failures(date_from: str = None, date_to: str = None):
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY started_at DESC LIMIT 1000"
+        query += " ORDER BY started_at DESC LIMIT 5000"
 
         rows = conn.execute(query, params).fetchall()
 
@@ -273,11 +259,9 @@ def get_overnight_failures(date_from: str = None, date_to: str = None):
                 continue
             end = _safe_parse_datetime(item.get("ended_at")) or datetime.now()
 
-            # Sprawdź czy przecina noc W WYBRANYM ZAKRESIE
             if not _overlaps_night_in_range(start, end, date_from, date_to):
                 continue
 
-            # Czas trwania (ochrona przed ujemnym)
             if item.get("ended_at"):
                 end_dt = _safe_parse_datetime(item.get("ended_at"))
                 if end_dt and end_dt >= start:
@@ -300,61 +284,30 @@ def get_overnight_failures(date_from: str = None, date_to: str = None):
                 break
         return result
 
-
-def _overlaps_night_in_range(start: datetime, end: datetime, date_from: str | None, date_to: str | None) -> bool:
-    """Czy awaria przecina okno 17:00–09:00 w podanym zakresie dat."""
-    # Ogranicz start/end do zakresu filtrów
-    range_start = datetime.strptime(date_from, "%Y-%m-%d") if date_from else start
-    range_end = datetime.strptime(date_to + " 23:59:59", "%Y-%m-%d %H:%M:%S") if date_to else end
-
-    check_start = max(start, range_start)
-    check_end = min(end, range_end)
-    if check_start >= check_end:
-        return False
-
-    return _overlaps_night(check_start, check_end)
-
-def _overlaps_night(start: datetime, end: datetime) -> bool:
-    """Czy przedział przecina się z jakimkolwiek oknem 17:00–09:00."""
-    current = start.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_day = end.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    while current <= end_day:
-        night_start = current.replace(hour=17, minute=0, second=0)
-        night_end = (current + timedelta(days=1)).replace(hour=9, minute=0, second=0)
-        if start < night_end and end > night_start:
-            return True
-        current += timedelta(days=1)
-    return False
-
-def clear_failure_history() -> int:
+def clear_failure_history():
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM failure_history")
-        return cursor.rowcount
+        cur = conn.execute("DELETE FROM failure_history")
+        conn.commit()
+        return cur.rowcount
+
+def cleanup_old_failures(days: int = 90):
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM failure_history WHERE ended_at IS NOT NULL AND ended_at < ?",
+            (cutoff,)
+        )
+        conn.commit()
+        return cur.rowcount
 
 def backup_database():
-    """Bezpieczny backup przez API SQLite."""
     BACKUP_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = BACKUP_DIR / f"clients_{timestamp}.sqlite3"
-
+    dest = BACKUP_DIR / f"clients_{timestamp}.sqlite3"
     src = sqlite3.connect(DB_PATH)
-    dst = sqlite3.connect(backup_path)
+    dst = sqlite3.connect(dest)
     with dst:
         src.backup(dst)
     src.close()
     dst.close()
-
-    backups = sorted(BACKUP_DIR.glob("clients_*.sqlite3"))
-    for old in backups[:-14]:
-        old.unlink(missing_ok=True)
-    return backup_path
-
-def cleanup_old_failures(days: int = 90):
-    """Usuwa zamknięte awarie starsze niż podana liczba dni. Otwarte zostawia."""
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    with get_db() as conn:
-        cursor = conn.execute(
-            "DELETE FROM failure_history WHERE started_at < ? AND ended_at IS NOT NULL",
-            (cutoff,)
-        )
-        return cursor.rowcount
+    return dest

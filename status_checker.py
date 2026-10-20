@@ -96,12 +96,6 @@ def refresh_all_statuses():
         devices = load_devices()
         ssh_ok = True
 
-        # Lokalny ARP tylko jako uzupełnienie
-        local_arp = get_local_arp()
-        if local_arp is not None:
-            arp_table.update(local_arp)
-
-        # Wszystkie urządzenia SSH muszą odpowiedzieć
         if devices:
             for dev in devices:
                 device_arp = get_arp_with_retry(dev)
@@ -110,18 +104,23 @@ def refresh_all_statuses():
                     ssh_ok = False
                     break
                 arp_table.update(device_arp)
+            if ssh_ok:
+                local_arp = get_local_arp()
+                if local_arp is not None:
+                    arp_table.update(local_arp)
         else:
-            logger.info("Brak urządzeń SSH — używam tylko lokalnego ARP")
+            logger.warning("Brak devices.json — monitoring opiera się wyłącznie na lokalnym ARP")
+            local_arp = get_local_arp()
+            if local_arp is None or len(local_arp) < 3:
+                logger.error("Słaby lub brak lokalnego ARP — pomijam aktualizację")
+                return
+            arp_table.update(local_arp)
 
         if not ssh_ok:
             return
 
-        if not devices and (local_arp is None or len(local_arp) < 3):
-            logger.warning("Brak urządzeń SSH i słaby lokalny ARP — pomijam aktualizację")
-            return
-
         if not arp_table:
-            logger.error("Brak jakichkolwiek danych ARP — pomijam aktualizację")
+            logger.error("Brak danych ARP — pomijam aktualizację")
             return
 
         logger.info(f"Łącznie wpisów ARP: {len(arp_table)}")

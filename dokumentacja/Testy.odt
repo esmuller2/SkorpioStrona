@@ -1,0 +1,182 @@
+import pytest
+import sqlite3
+from pathlib import Path
+from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock
+import tempfile
+import shutil
+import os
+import sys
+
+# Dodaj katalog projektu do path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import database
+import huawei
+import status_checker
+
+
+@pytest.fixture
+def temp_db(tmp_path, monkeypatch):
+    """Tymczasowa baza dla izolacji testów."""
+    db_file = tmp_path / "test.sqlite3"
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+
+    monkeypatch.setattr(database, "DB_PATH", db_file)
+    monkeypatch.setattr(database, "BACKUP_DIR", backup_dir)
+
+    database.init_db()
+    yield db_file
+
+
+class TestDatabase:
+    def test_init_db_creates_tables(self, temp_db):
+        with database.get_db() as conn:
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            assert "clients" in tables
+            assert "failure_history" in tables
+
+    def test_add_and_get_client(self, temp_db):
+        ok, msg = database.add_client("TEST-001", "10.0.0.1")
+        assert ok is True
+        assert "dodany" in msg.lower()
+
+        clients, total = database.get_clients_paginated()
+        assert total == 1
+        assert clients[0]["client_id"] == "TEST-001"
+        assert clients[0]["ip"] == "10.0.0.1"
+        assert clients[0]["status"] == "ok"
+
+    def test_add_duplicate_client(self, temp_db):
+        database.add_client("DUP", "1.1.1.1")
+        ok, msg = database.add_client("DUP", "2.2.2.2")
+        assert ok is False
+        assert "istnieje" in msg.lower()
+
+    def test_delete_client(self, temp_db):
+        database.add_client("DEL", "1.1.1.1")
+        ok, msg = database.delete_client("DEL")
+        assert ok is True
+        clients, total = database.get_clients_paginated()
+        assert total == 0
+
+    def test_delete_nonexistent(self, temp_db):
+        ok, msg = database.delete_client("NIEMA")
+        assert ok is False
+
+    def test_update_client(self, temp_db):
+        database.add_client("OLD", "1.1.1.1")
+        ok, msg = database.update_client("OLD", "NEW", "9.9.9.9")
+        assert ok is True
+        clients, _ = database.get_clients_paginated()
+        assert clients[0]["client_id"] == "NEW"
+        assert clients[0]["ip"] == "9.9.9.9"
+
+    def test_failure_no_duplicate_open(self, temp_db):
+        database.add_client("F1", "10.0.0.1")
+        database.log_failure_start("F1", "2026-01-01 10:00:00")
+        database.log_failure_start("F1", "2026-01-01 10:05:00")  # drugie nie powinno dodać
+
+        history = database.get_failure_history_filtered(client_id="F1")
+        assert len(history) == 1
+        assert history[0]["ended_at"] is None
+
+    def test_failure_end(self, temp_db):
+        database.add_client("F2", "10.0.0.2")
+        database.log_failure_start("F2")
+        database.log_failure_end("F2")
+
+        history = database.get_failure_history_filtered(client_id="F2")
+        assert len(history) == 1
+        assert history[0]["ended_at"] is not None
+        assert "min" in history[0]["duration"] or "godz" in history[0]["duration"] or history[0]["duration"] == "—"
+
+    def test_pagination_and_filter(self, temp_db):
+        for i in range(5):
+            database.add_client(f"C{i}", f"10.0.0.{i}")
+            if i % 2 == 0:
+                database.update_client_status(f"C{i}", "error", error_time="2026-01-01 00:00:00")
+
+        clients, total = database.get_clients_paginated(page=1, per_page=2, status_filter="error")
+        assert total == 3  # 0,2,4
+        assert len(clients) == 2
+
+    def test_safe_parse_datetime(self):
+        assert database._safe_parse_datetime(None) is None
+        assert database._safe_parse_datetime("invalid") is None
+        dt = database._safe_parse_datetime("2026-10-20 12:00:00")
+        assert dt is not None
+        assert dt.year == 2026
+
+
+class TestHuawei:
+    def test_parse_arp_output(self):
+        sample = """
+IP ADDRESS      MAC ADDRESS     EXP(M) TYPE/VLAN INTERFACE
+10.1.1.1        00-11-22-33-44-55   20   D/100    Eth0
+10.1.1.255      aa-bb-cc-dd-ee-ff   10   D/1      Eth1
+224.0.0.1       00-00-00-00-00-00    5   S/0      -
+192.168.1.10    11-22-33-44-55-66   15   D/1      Eth0
+"""
+        with patch.object(huawei, "_ssh_command", return_value=sample):
+            result = huawei.get_arp_table("host", "user", "pass")
+            assert result is not None
+            assert "10.1.1.1" in result
+            assert "192.168.1.10" in result
+            assert "10.1.1.255" not in result
+            assert "224.0.0.1" not in result
+
+    def test_arp_none_on_ssh_fail(self):
+        with patch.object(huawei, "_ssh_command", return_value=None):
+            result = huawei.get_arp_table("host", "user", "pass")
+            assert result is None
+
+    def test_check_client_in_arp(self):
+        with patch.object(huawei, "get_arp_table", return_value={"10.0.0.1", "10.0.0.2"}):
+            assert huawei.check_client_in_arp("h", "u", "p", "10.0.0.1") is True
+            assert huawei.check_client_in_arp("h", "u", "p", "10.0.0.99") is False
+
+
+class TestStatusChecker:
+    def test_load_devices_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(status_checker, "DEVICES_PATH", tmp_path / "missing.json")
+        assert status_checker.load_devices() == []
+
+    def test_load_devices_valid(self, tmp_path, monkeypatch):
+        devices_file = tmp_path / "devices.json"
+        devices_file.write_text('[{"host": "1.1.1.1", "username": "u", "password": "p"}]')
+        monkeypatch.setattr(status_checker, "DEVICES_PATH", devices_file)
+        devs = status_checker.load_devices()
+        assert len(devs) == 1
+        assert devs[0]["host"] == "1.1.1.1"
+
+    def test_get_arp_with_retry_success(self):
+        mock_arp = {"10.0.0.1"}
+        with patch.object(huawei, "get_arp_table", return_value=mock_arp):
+            result = status_checker.get_arp_with_retry({"host": "h", "username": "u", "password": "p", "name": "test"})
+            assert result == mock_arp
+
+    def test_get_arp_with_retry_fail(self):
+        with patch.object(huawei, "get_arp_table", return_value=None):
+            result = status_checker.get_arp_with_retry({"host": "h", "username": "u", "password": "p"})
+            assert result is None
+
+    def test_get_local_arp_parse(self):
+        fake_output = "192.168.1.1 ether aa:bb:cc\n10.0.0.255 ether xx\n224.1.1.1 ether yy\n192.168.1.50 ether zz"
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = fake_output
+
+        with patch("subprocess.run", return_value=mock_result):
+            with patch("platform.system", return_value="Linux"):
+                arp = status_checker.get_local_arp()
+                assert arp is not None
+                assert "192.168.1.1" in arp
+                assert "192.168.1.50" in arp
+                assert "10.0.0.255" not in arp
+                assert "224.1.1.1" not in arp
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
