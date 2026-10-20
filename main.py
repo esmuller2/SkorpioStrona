@@ -218,6 +218,7 @@ def home(
             "total": total,
             "search": search or "",
             "status_filter": status_filter or "",
+            "csrf_token": generate_csrf_token(request),
         },
     )
 
@@ -228,6 +229,8 @@ def history_page(
     date_from: str = None,
     date_to: str = None,
     only_open: bool = False,
+    msg: str = None,
+    error: str = None,
 ):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
@@ -255,7 +258,14 @@ def history_page(
                 start = datetime.strptime(item["started_at"], "%Y-%m-%d %H:%M:%S")
                 end = datetime.strptime(item["ended_at"], "%Y-%m-%d %H:%M:%S")
                 minutes = int((end - start).total_seconds() // 60)
-                item["duration"] = f"{minutes} min"
+                hours = minutes // 60
+                mins = minutes % 60
+                if hours > 0 and mins > 0:
+                    item["duration"] = f"{hours} godz {mins} min"
+                elif hours > 0:
+                    item["duration"] = f"{hours} godz"
+                else:
+                    item["duration"] = f"{mins} min"
             except Exception:
                 item["duration"] = "—"
         else:
@@ -270,132 +280,19 @@ def history_page(
             "date_from": date_from or "",
             "date_to": date_to or "",
             "only_open": only_open,
+            "msg": msg,
+            "error": error,
+            "csrf_token": generate_csrf_token(request),
         },
     )
-
-@app.get("/export")
-def export_csv(request: Request):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
-
-    clients = database.get_all_clients()
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["ID Klienta", "Adres IP", "Status", "Czas awarii", "Ping (ms)"])
-    for c in clients:
-        writer.writerow([
-            c["client_id"],
-            c["ip"],
-            c["status"],
-            c.get("error_time") or "",
-            c.get("ping_ms") or ""
-        ])
-    output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=klienci.csv"}
-    )
-
-@app.post("/add")
-def add_client(request: Request, client_id: str = Form(...), ip: str = Form(...)):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
-
-    client_id = client_id.strip()
-    ip = ip.strip()
-
-    if not client_id or len(client_id) > 50 or len(client_id) < 1:
-        return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
-        return RedirectResponse(url="/?error=Nieprawidłowy adres IP", status_code=303)
-
-    success, message = database.add_client(client_id, ip, "ok")
-    return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
-
-@app.post("/delete")
-def delete_client(request: Request, client_id: str = Form(...)):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
-    success, message = database.delete_client(client_id)
-    return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
-
-@app.post("/edit")
-def edit_client(
-    request: Request,
-    old_client_id: str = Form(...),
-    new_client_id: str = Form(...),
-    new_ip: str = Form(...),
-):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
-
-    new_client_id = new_client_id.strip()
-    new_ip = new_ip.strip()
-
-    if not new_client_id or len(new_client_id) > 50 or len(new_client_id) < 1:
-        return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
-    try:
-        ipaddress.ip_address(new_ip)
-    except ValueError:
-        return RedirectResponse(url="/?error=Nieprawidłowy adres IP", status_code=303)
-
-    success, message = database.update_client(old_client_id, new_client_id, new_ip)
-    return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
-
-@app.post("/refresh-status")
-def refresh_status(request: Request):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
-    status_checker.refresh_all_statuses()
-    return RedirectResponse(url="/?msg=Statusy zostały odświeżone", status_code=303)
-
-@app.post("/backup-now")
-def backup_now(request: Request):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
-    path = database.backup_database()
-    return RedirectResponse(url=f"/?msg=Backup zapisany: {path.name}", status_code=303)
-
-@app.post("/cleanup-now")
-def cleanup_now(request: Request):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
-    deleted = database.cleanup_old_failures(90)
-    return RedirectResponse(url=f"/?msg=Usunięto {deleted} starych awarii", status_code=303)
-
-@app.get("/api/clients")
-def api_clients(
-    request: Request,
-    page: int = 1,
-    search: str = None,
-    status_filter: str = None,
-):
-    if not get_current_user(request):
-        return {"error": "unauthorized"}
-
-    per_page = 100
-    clients, total = database.get_clients_paginated(search, page, per_page, status_filter)
-    total_pages = max(1, (total + per_page - 1) // per_page)
-    page = max(1, min(page, total_pages))
-
-    errors = [c for c in clients if c["status"] == "error"]
-
-    return {
-        "clients": clients,
-        "errors": errors,
-        "page": page,
-        "total_pages": total_pages,
-        "total": total,
-    }
 
 @app.get("/overnight")
 def overnight_page(
     request: Request,
     date_from: str = None,
     date_to: str = None,
+    msg: str = None,
+    error: str = None,
 ):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
@@ -440,15 +337,164 @@ def overnight_page(
             "history": history,
             "date_from": date_from or "",
             "date_to": date_to or "",
+            "msg": msg,
+            "error": error,
+            "csrf_token": generate_csrf_token(request),
         },
     )
 
-@app.post("/clear-history")
-def clear_history(request: Request):
+@app.get("/export")
+def export_csv(request: Request):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
+
+    clients = database.get_all_clients()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID Klienta", "Adres IP", "Status", "Czas awarii", "Ping (ms)"])
+    for c in clients:
+        writer.writerow([
+            c["client_id"],
+            c["ip"],
+            c["status"],
+            c.get("error_time") or "",
+            c.get("ping_ms") or ""
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=klienci.csv"}
+    )
+
+@app.post("/add")
+def add_client(
+    request: Request,
+    client_id: str = Form(...),
+    ip: str = Form(...),
+    csrf_token: str = Form(...)
+):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if not validate_csrf(request, csrf_token):
+        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+
+    client_id = client_id.strip()
+    ip = ip.strip()
+
+    if not client_id or len(client_id) > 50 or len(client_id) < 1:
+        return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return RedirectResponse(url="/?error=Nieprawidłowy adres IP", status_code=303)
+
+    success, message = database.add_client(client_id, ip, "ok")
+    return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
+
+@app.post("/delete")
+def delete_client(
+    request: Request,
+    client_id: str = Form(...),
+    csrf_token: str | None = Form(None)
+):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if not csrf_token or not validate_csrf(request, csrf_token):
+        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+    success, message = database.delete_client(client_id)
+    return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
+
+@app.post("/edit")
+def edit_client(
+    request: Request,
+    old_client_id: str = Form(...),
+    new_client_id: str = Form(...),
+    new_ip: str = Form(...),
+    csrf_token: str = Form(...)
+):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if not validate_csrf(request, csrf_token):
+        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+
+    new_client_id = new_client_id.strip()
+    new_ip = new_ip.strip()
+
+    if not new_client_id or len(new_client_id) > 50 or len(new_client_id) < 1:
+        return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
+    try:
+        ipaddress.ip_address(new_ip)
+    except ValueError:
+        return RedirectResponse(url="/?error=Nieprawidłowy adres IP", status_code=303)
+
+    success, message = database.update_client(old_client_id, new_client_id, new_ip)
+    return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
+
+@app.post("/refresh-status")
+def refresh_status(request: Request, csrf_token: str = Form(...)):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if not validate_csrf(request, csrf_token):
+        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+    status_checker.refresh_all_statuses()
+    return RedirectResponse(url="/?msg=Statusy zostały odświeżone", status_code=303)
+
+@app.post("/backup-now")
+def backup_now(request: Request, csrf_token: str = Form(...)):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if not validate_csrf(request, csrf_token):
+        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+    path = database.backup_database()
+    return RedirectResponse(url=f"/?msg=Backup zapisany: {path.name}", status_code=303)
+
+@app.post("/cleanup-now")
+def cleanup_now(request: Request, csrf_token: str = Form(...)):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if not validate_csrf(request, csrf_token):
+        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+    deleted = database.cleanup_old_failures(90)
+    return RedirectResponse(url=f"/?msg=Usunięto {deleted} starych awarii", status_code=303)
+
+@app.post("/clear-history")
+def clear_history(
+    request: Request,
+    csrf_token: str = Form(...),
+    next: str = Form("/history")
+):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if not validate_csrf(request, csrf_token):
+        return RedirectResponse(url=f"{next}?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
     deleted = database.clear_failure_history()
-    return RedirectResponse(url=f"/history?msg=Usunięto {deleted} wpisów historii", status_code=303)
+    return RedirectResponse(url=f"{next}?msg=Usunięto {deleted} wpisów historii", status_code=303)
+
+@app.get("/api/clients")
+def api_clients(
+    request: Request,
+    page: int = 1,
+    search: str = None,
+    status_filter: str = None,
+):
+    if not get_current_user(request):
+        return {"error": "unauthorized"}
+
+    per_page = 100
+    clients, total = database.get_clients_paginated(search, page, per_page, status_filter)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+
+    errors = [c for c in clients if c["status"] == "error"]
+
+    return {
+        "clients": clients,
+        "errors": errors,
+        "page": page,
+        "total_pages": total_pages,
+        "total": total,
+    }
 
 @app.get("/health")
 def health():

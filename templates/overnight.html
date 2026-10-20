@@ -16,19 +16,23 @@
             </div>
         </div>
 
+        {% if msg %}<div class="msg-success">{{ msg }}</div>{% endif %}
+        {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
+
         <form method="get" action="/overnight" class="controls">
             <label>Od: <input type="date" name="date_from" value="{{ date_from }}"></label>
             <label>Do: <input type="date" name="date_to" value="{{ date_to }}"></label>
             <button type="submit">Filtruj</button>
             <a href="/overnight" class="btn btn-secondary">Wyczyść</a>
+            <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Raport nocny też zostanie wyczyszczony.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="next" value="/overnight">
+                <button type="submit" class="btn-danger">Wyczyść historię</button>
+            </form>
         </form>
 
-        <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Raport nocny też zostanie wyczyszczony.')">
-    <button type="submit" class="btn-danger">Wyczyść historię</button>
-</form>
-
         <p style="color:var(--muted); font-size:14px;">
-            Awarie, które zaczęły się lub trwały poza godzinami pracy (17:00–09:00).
+            Awarie, które przecinają się z godzinami 17:00–09:00.
             Łącznie: {{ history|length }}
         </p>
 

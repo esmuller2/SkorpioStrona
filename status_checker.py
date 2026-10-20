@@ -28,7 +28,8 @@ def load_devices() -> list[dict]:
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
-def get_arp_with_retry(dev: dict) -> set[str]:
+def get_arp_with_retry(dev: dict) -> set[str] | None:
+    """Zwraca zbiór IP lub None przy całkowitym niepowodzeniu."""
     name = dev.get("name", dev["host"])
     port = dev.get("port", 22)
     for attempt in range(1, MAX_RETRIES + 1):
@@ -40,11 +41,11 @@ def get_arp_with_retry(dev: dict) -> set[str]:
                 password=dev["password"],
                 port=port,
             )
-            if arp:
+            if arp is not None:
                 logger.info(f"{name} → {len(arp)} wpisów ARP")
                 return arp
             else:
-                logger.warning(f"{name} → pusta odpowiedź (próba {attempt})")
+                logger.warning(f"{name} → błąd odczytu (próba {attempt})")
         except Exception as e:
             logger.warning(f"{name} → błąd SSH (próba {attempt}): {type(e).__name__}: {e}")
 
@@ -52,14 +53,14 @@ def get_arp_with_retry(dev: dict) -> set[str]:
             time.sleep(RETRY_DELAY)
 
     logger.error(f"{name} → nie udało się pobrać ARP po {MAX_RETRIES} próbach")
-    return set()
+    return None
 
-def get_local_arp() -> set[str]:
+def get_local_arp() -> set[str] | None:
+    """Zwraca zbiór IP lub None przy błędzie odczytu."""
     import subprocess
     import platform
     import re
 
-    arp: set[str] = set()
     try:
         if platform.system().lower() == "windows":
             result = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10)
@@ -67,8 +68,10 @@ def get_local_arp() -> set[str]:
             result = subprocess.run(["arp", "-n"], capture_output=True, text=True, timeout=10)
 
         if result.returncode != 0:
-            return arp
+            logger.error("Lokalny ARP zwrócił błąd")
+            return None
 
+        arp: set[str] = set()
         ip_re = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
         for line in result.stdout.splitlines():
             match = ip_re.search(line)
@@ -80,7 +83,7 @@ def get_local_arp() -> set[str]:
         return arp
     except Exception as e:
         logger.error(f"Błąd lokalnego ARP: {type(e).__name__}: {e}")
-        return set()
+        return None
 
 def refresh_all_statuses():
     if not refresh_lock.acquire(blocking=False):
@@ -91,15 +94,28 @@ def refresh_all_statuses():
         logger.info("=== Rozpoczynam sprawdzanie statusów ===")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        arp_table: set[str] = get_local_arp()
+        local_arp = get_local_arp()
+        if local_arp is None:
+            logger.error("Nie udało się odczytać lokalnego ARP — pomijam aktualizację statusów")
+            return
+
+        arp_table: set[str] = local_arp
 
         devices = load_devices()
+        device_failed = False
         if devices:
             for dev in devices:
                 device_arp = get_arp_with_retry(dev)
-                arp_table.update(device_arp)
+                if device_arp is None:
+                    logger.warning(f"Urządzenie {dev.get('name', dev['host'])} nie odpowiedziało — kontynuuję z pozostałymi")
+                    device_failed = True
+                else:
+                    arp_table.update(device_arp)
         else:
             logger.info("Brak urządzeń SSH — używam tylko lokalnego ARP")
+
+        if device_failed and not devices:
+            pass  # już obsłużone
 
         logger.info(f"Łącznie wpisów ARP: {len(arp_table)}")
 
@@ -122,6 +138,7 @@ def refresh_all_statuses():
                     database.update_client_status(client_id, "ok", last_seen=now)
             else:
                 if old_status != "error":
+                    # Tylko jeśli mamy potwierdzony odczyt ARP
                     start_time = last_seen if last_seen else now
                     database.log_failure_start(client_id, started_at=start_time)
                     database.update_client_status(client_id, "error", error_time=start_time)

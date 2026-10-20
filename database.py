@@ -1,11 +1,11 @@
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
-from datetime import timedelta
 
 DB_PATH = Path(__file__).resolve().parent / "clients.sqlite3"
+BACKUP_DIR = Path(__file__).resolve().parent / "backups"
 
 @contextmanager
 def get_db():
@@ -44,7 +44,6 @@ def init_db():
             )
         """)
 
-        # Indeksy
         conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_ip ON clients(ip)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_failure_client ON failure_history(client_id)")
@@ -91,11 +90,10 @@ def get_all_clients():
 
 def add_client(client_id: str, ip: str, status: str = "ok") -> tuple[bool, str]:
     try:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO clients (client_id, ip, status, last_seen) VALUES (?, ?, ?, ?)",
-                (client_id, ip, status, now)
+                "INSERT INTO clients (client_id, ip, status, last_seen) VALUES (?, ?, ?, NULL)",
+                (client_id, ip, status)
             )
         return True, "Klient dodany"
     except sqlite3.IntegrityError:
@@ -117,6 +115,11 @@ def update_client(old_id: str, new_id: str, new_ip: str) -> tuple[bool, str]:
             )
             if cursor.rowcount == 0:
                 return False, "Nie znaleziono klienta"
+            # Aktualizuj historię awarii
+            conn.execute(
+                "UPDATE failure_history SET client_id = ? WHERE client_id = ?",
+                (new_id, old_id)
+            )
         return True, "Klient zaktualizowany"
     except sqlite3.IntegrityError:
         return False, "Klient o nowym ID już istnieje"
@@ -213,59 +216,78 @@ def get_failure_history_filtered(
         ).fetchall()
         return [dict(row) for row in rows]
 
-BACKUP_DIR = Path(__file__).resolve().parent / "backups"
+def get_overnight_failures(date_from: str = None, date_to: str = None):
+    """Awarie, które przecinają się z oknem 17:00–09:00."""
+    with get_db() as conn:
+        # Pobierz wszystkie i filtruj w Pythonie dla dokładności
+        query = "SELECT * FROM failure_history"
+        params = []
+        conditions = []
+        if date_from:
+            conditions.append("started_at >= ?")
+            params.append(date_from + " 00:00:00")
+        if date_to:
+            conditions.append("(ended_at IS NULL OR ended_at <= ?)")
+            params.append(date_to + " 23:59:59")
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY started_at DESC LIMIT 1000"
+        rows = conn.execute(query, params).fetchall()
+
+        result = []
+        for row in rows:
+            item = dict(row)
+            start = datetime.strptime(item["started_at"], "%Y-%m-%d %H:%M:%S")
+            end = datetime.strptime(item["ended_at"], "%Y-%m-%d %H:%M:%S") if item["ended_at"] else datetime.now()
+
+            # Sprawdź czy przedział [start, end] przecina noc 17:00-09:00
+            if _overlaps_night(start, end):
+                result.append(item)
+            if len(result) >= 500:
+                break
+        return result
+
+def _overlaps_night(start: datetime, end: datetime) -> bool:
+    """Czy przedział przecina się z jakimkolwiek oknem 17:00–09:00."""
+    current = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = end.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    while current <= end_day:
+        night_start = current.replace(hour=17, minute=0, second=0)
+        night_end = (current + timedelta(days=1)).replace(hour=9, minute=0, second=0)
+        if start < night_end and end > night_start:
+            return True
+        current += timedelta(days=1)
+    return False
+
+def clear_failure_history() -> int:
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM failure_history")
+        return cursor.rowcount
 
 def backup_database():
-    """Tworzy kopię zapasową bazy."""
+    """Bezpieczny backup przez API SQLite."""
     BACKUP_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = BACKUP_DIR / f"clients_{timestamp}.sqlite3"
-    shutil.copy2(DB_PATH, backup_path)
-    # Zostaw tylko ostatnie 14 kopii
+
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(backup_path)
+    with dst:
+        src.backup(dst)
+    src.close()
+    dst.close()
+
     backups = sorted(BACKUP_DIR.glob("clients_*.sqlite3"))
     for old in backups[:-14]:
         old.unlink(missing_ok=True)
     return backup_path
 
 def cleanup_old_failures(days: int = 90):
-    """Usuwa awarie starsze niż podana liczba dni."""
+    """Usuwa zamknięte awarie starsze niż podana liczba dni. Otwarte zostawia."""
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.execute(
-            "DELETE FROM failure_history WHERE started_at < ?",
+            "DELETE FROM failure_history WHERE started_at < ? AND ended_at IS NOT NULL",
             (cutoff,)
         )
-        return cursor.rowcount
-
-def get_overnight_failures(date_from: str = None, date_to: str = None):
-    """Awarie z okresu 17:00–09:00."""
-    with get_db() as conn:
-        query = """
-            SELECT * FROM failure_history
-            WHERE (
-                (strftime('%H:%M', started_at) >= '17:00' OR strftime('%H:%M', started_at) < '09:00')
-                OR
-                (ended_at IS NOT NULL AND (
-                    strftime('%H:%M', ended_at) >= '17:00' OR strftime('%H:%M', ended_at) < '09:00'
-                ))
-                OR
-                (ended_at IS NULL)
-            )
-        """
-        params = []
-        if date_from:
-            query += " AND started_at >= ?"
-            params.append(date_from)
-        if date_to:
-            query += " AND started_at <= ?"
-            params.append(date_to + " 23:59:59")
-
-        query += " ORDER BY started_at DESC LIMIT 500"
-        rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
-
-def clear_failure_history() -> int:
-    """Usuwa całą historię awarii. Zwraca liczbę usuniętych rekordów."""
-    with get_db() as conn:
-        cursor = conn.execute("DELETE FROM failure_history")
         return cursor.rowcount

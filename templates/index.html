@@ -25,12 +25,15 @@
         <div class="controls">
             <button onclick="location.reload()">Odśwież</button>
             <form method="post" action="/refresh-status" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit">Odśwież statusy</button>
             </form>
             <form method="post" action="/backup-now" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit">Backup teraz</button>
             </form>
             <form method="post" action="/cleanup-now" style="display:inline;" onsubmit="return confirm('Usunąć awarie starsze niż 90 dni?')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit" class="btn-danger">Wyczyść stare awarie</button>
             </form>
             <a href="/export" class="btn btn-success">Eksport CSV</a>
@@ -47,6 +50,7 @@
         </div>
 
         <form class="add-form" method="post" action="/add">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="text" name="client_id" placeholder="ID Klienta" required maxlength="50">
             <input type="text" name="ip" placeholder="Adres IP" required>
             <button type="submit">Dodaj</button>
@@ -87,14 +91,16 @@
                 <td>
                     <form method="post" action="/edit" style="display:inline;">
                         <input type="hidden" name="old_client_id" value="{{ client.client_id|e }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <input type="text" name="new_client_id" value="{{ client.client_id|e }}" class="edit-input" required maxlength="50">
                         <input type="text" name="new_ip" value="{{ client.ip|e }}" class="edit-input" required>
                         <button type="submit" class="btn-warning">Zapisz</button>
                     </form>
                     <form method="post" action="/delete" style="display:inline; margin-left:6px;">
-                        <input type="hidden" name="client_id" value="{{ client.client_id|e }}">
-                        <button type="submit" class="btn-danger" onclick="return confirm('Usunąć?')">Usuń</button>
-                    </form>
+    <input type="hidden" name="client_id" value="{{ client.client_id|e }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn-danger" onclick="return confirm('Usunąć?')">Usuń</button>
+</form>
                 </td>
             </tr>
             {% else %}
@@ -167,12 +173,6 @@
             document.querySelectorAll('.duration').forEach(el => {
                 el.textContent = formatDuration(el.dataset.start);
             });
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text == null ? '' : String(text);
-            return div.innerHTML;
         }
 
         function findRowByClientId(clientId) {
