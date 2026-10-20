@@ -391,6 +391,65 @@ def api_clients(
         "total": total,
     }
 
+@app.get("/overnight")
+def overnight_page(
+    request: Request,
+    date_from: str = None,
+    date_to: str = None,
+):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+
+    def valid_date(d: str | None) -> str | None:
+        if not d:
+            return None
+        try:
+            datetime.strptime(d, "%Y-%m-%d")
+            return d
+        except ValueError:
+            return None
+
+    history = database.get_overnight_failures(
+        date_from=valid_date(date_from),
+        date_to=valid_date(date_to)
+    )
+
+    for item in history:
+        if item["ended_at"]:
+            try:
+                start = datetime.strptime(item["started_at"], "%Y-%m-%d %H:%M:%S")
+                end = datetime.strptime(item["ended_at"], "%Y-%m-%d %H:%M:%S")
+                minutes = int((end - start).total_seconds() // 60)
+                hours = minutes // 60
+                mins = minutes % 60
+                if hours > 0 and mins > 0:
+                    item["duration"] = f"{hours} godz {mins} min"
+                elif hours > 0:
+                    item["duration"] = f"{hours} godz"
+                else:
+                    item["duration"] = f"{mins} min"
+            except Exception:
+                item["duration"] = "—"
+        else:
+            item["duration"] = "trwa"
+
+    return templates.TemplateResponse(
+        request=request,
+        name="overnight.html",
+        context={
+            "history": history,
+            "date_from": date_from or "",
+            "date_to": date_to or "",
+        },
+    )
+
+@app.post("/clear-history")
+def clear_history(request: Request):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    deleted = database.clear_failure_history()
+    return RedirectResponse(url=f"/history?msg=Usunięto {deleted} wpisów historii", status_code=303)
+
 @app.get("/health")
 def health():
     return {"status": "ok", "time": datetime.now().isoformat()}

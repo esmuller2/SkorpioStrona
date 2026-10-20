@@ -27,30 +27,37 @@
             <form method="post" action="/refresh-status" style="display:inline;">
                 <button type="submit">Odśwież statusy</button>
             </form>
+            <form method="post" action="/backup-now" style="display:inline;">
+                <button type="submit">Backup teraz</button>
+            </form>
+            <form method="post" action="/cleanup-now" style="display:inline;" onsubmit="return confirm('Usunąć awarie starsze niż 90 dni?')">
+                <button type="submit" class="btn-danger">Wyczyść stare awarie</button>
+            </form>
             <a href="/export" class="btn btn-success">Eksport CSV</a>
 
             <form method="get" action="/" class="search-form" style="display:inline;">
-                <input type="text" name="search" placeholder="Szukaj ID..." value="{{ search }}">
-                {% if status_filter %}<input type="hidden" name="status_filter" value="{{ status_filter }}">{% endif %}
+                <input type="text" name="search" placeholder="Szukaj ID..." value="{{ search|e }}">
+                {% if status_filter %}<input type="hidden" name="status_filter" value="{{ status_filter|e }}">{% endif %}
                 <button type="submit">Szukaj</button>
             </form>
 
-            <a href="/?status_filter=error{% if search %}&search={{ search }}{% endif %}" class="btn {% if status_filter == 'error' %}btn-danger{% else %}btn-secondary{% endif %}">Awarie</a>
-            <a href="/?status_filter=ok{% if search %}&search={{ search }}{% endif %}" class="btn {% if status_filter == 'ok' %}btn-success{% else %}btn-secondary{% endif %}">OK</a>
-            <a href="/{% if search %}?search={{ search }}{% endif %}" class="btn btn-secondary">Wszystkie</a>
+            <a href="/?status_filter=error{% if search %}&search={{ search|urlencode }}{% endif %}" class="btn {% if status_filter == 'error' %}btn-danger{% else %}btn-secondary{% endif %}">Awarie</a>
+            <a href="/?status_filter=ok{% if search %}&search={{ search|urlencode }}{% endif %}" class="btn {% if status_filter == 'ok' %}btn-success{% else %}btn-secondary{% endif %}">OK</a>
+            <a href="/{% if search %}?search={{ search|urlencode }}{% endif %}" class="btn btn-secondary">Wszystkie</a>
         </div>
 
         <form class="add-form" method="post" action="/add">
-            <input type="text" name="client_id" placeholder="ID Klienta" required>
+            <input type="text" name="client_id" placeholder="ID Klienta" required maxlength="50">
             <input type="text" name="ip" placeholder="Adres IP" required>
             <button type="submit">Dodaj</button>
         </form>
 
         <p id="summary" style="color:var(--muted); font-size:14px; margin-bottom:12px;">
             {{ clients|length }} z {{ total }}
-            {% if search %} · „{{ search }}”{% endif %}
-            {% if status_filter %} · {{ status_filter }}{% endif %}
+            {% if search %} · „{{ search|e }}”{% endif %}
+            {% if status_filter %} · {{ status_filter|e }}{% endif %}
             · <a href="/history">Historia awarii</a>
+            · <a href="/overnight">Raport nocny</a>
         </p>
 
         <table id="clients-table">
@@ -62,28 +69,30 @@
                 <th>Akcje</th>
             </tr>
             {% for client in clients %}
-            <tr data-id="{{ client.client_id }}">
+            <tr data-id="{{ client.client_id|e }}">
                 <td>{{ (page - 1) * 100 + loop.index }}</td>
-                <td>{{ client.client_id }}</td>
-                <td>{{ client.ip }}</td>
+                <td>{{ client.client_id|e }}</td>
+                <td>{{ client.ip|e }}</td>
                 <td class="status-cell">
                     {% if client.status == "ok" %}
                         <span class="dot dot-ok"></span><span class="status-ok">OK</span>
-                        {% if client.last_seen %}<span class="ping">ostatnio: {{ client.last_seen }}</span>{% endif %}
+                        {% if client.last_seen %}<span class="ping">ostatnio: {{ client.last_seen|e }}</span>{% endif %}
                     {% else %}
                         <span class="dot dot-error"></span><span class="status-error">Awaria</span>
-                        {% if client.error_time %}<span class="ping">{{ client.error_time }}</span>{% endif %}
+                        {% if client.error_time %}
+                            <span class="ping duration" data-start="{{ client.error_time|e }}">{{ client.error_time|e }}</span>
+                        {% endif %}
                     {% endif %}
                 </td>
                 <td>
                     <form method="post" action="/edit" style="display:inline;">
-                        <input type="hidden" name="old_client_id" value="{{ client.client_id }}">
-                        <input type="text" name="new_client_id" value="{{ client.client_id }}" class="edit-input" required>
-                        <input type="text" name="new_ip" value="{{ client.ip }}" class="edit-input" required>
+                        <input type="hidden" name="old_client_id" value="{{ client.client_id|e }}">
+                        <input type="text" name="new_client_id" value="{{ client.client_id|e }}" class="edit-input" required maxlength="50">
+                        <input type="text" name="new_ip" value="{{ client.ip|e }}" class="edit-input" required>
                         <button type="submit" class="btn-warning">Zapisz</button>
                     </form>
                     <form method="post" action="/delete" style="display:inline; margin-left:6px;">
-                        <input type="hidden" name="client_id" value="{{ client.client_id }}">
+                        <input type="hidden" name="client_id" value="{{ client.client_id|e }}">
                         <button type="submit" class="btn-danger" onclick="return confirm('Usunąć?')">Usuń</button>
                     </form>
                 </td>
@@ -96,11 +105,11 @@
         {% if total_pages > 1 %}
         <div class="pagination">
             {% if page > 1 %}
-                <a href="/?page={{ page-1 }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}">«</a>
+                <a href="/?page={{ page-1 }}{% if search %}&search={{ search|urlencode }}{% endif %}{% if status_filter %}&status_filter={{ status_filter|urlencode }}{% endif %}">«</a>
             {% else %}<span class="disabled">«</span>{% endif %}
             <span class="current">{{ page }} / {{ total_pages }}</span>
             {% if page < total_pages %}
-                <a href="/?page={{ page+1 }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}">»</a>
+                <a href="/?page={{ page+1 }}{% if search %}&search={{ search|urlencode }}{% endif %}{% if status_filter %}&status_filter={{ status_filter|urlencode }}{% endif %}">»</a>
             {% else %}<span class="disabled">»</span>{% endif %}
         </div>
         {% endif %}
@@ -133,6 +142,47 @@
         updateClock();
         setInterval(updateClock, 1000);
 
+        function formatDuration(startStr) {
+            if (!startStr) return '';
+            const start = new Date(startStr.replace(' ', 'T'));
+            const diffMs = Date.now() - start.getTime();
+            if (diffMs < 0) return 'teraz';
+
+            const totalMin = Math.floor(diffMs / 60000);
+            if (totalMin < 1) return 'teraz';
+
+            const hours = Math.floor(totalMin / 60);
+            const minutes = totalMin % 60;
+
+            if (hours > 0 && minutes > 0) {
+                return `${hours} godz ${minutes} min`;
+            } else if (hours > 0) {
+                return `${hours} godz`;
+            } else {
+                return `${minutes} min`;
+            }
+        }
+
+        function updateDurations() {
+            document.querySelectorAll('.duration').forEach(el => {
+                el.textContent = formatDuration(el.dataset.start);
+            });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text == null ? '' : String(text);
+            return div.innerHTML;
+        }
+
+        function findRowByClientId(clientId) {
+            const rows = document.querySelectorAll('#clients-table tr[data-id]');
+            for (const row of rows) {
+                if (row.dataset.id === clientId) return row;
+            }
+            return null;
+        }
+
         const params = new URLSearchParams(window.location.search);
         const page = params.get('page') || 1;
         const search = params.get('search') || '';
@@ -140,48 +190,105 @@
 
         async function refreshStatuses() {
             try {
-                const url = `/api/clients?page=${page}&search=${encodeURIComponent(search)}&status_filter=${encodeURIComponent(statusFilter)}`;
-                const res = await fetch(url);
+                const url = `/api/clients?page=${encodeURIComponent(page)}&search=${encodeURIComponent(search)}&status_filter=${encodeURIComponent(statusFilter)}`;
+                const res = await fetch(url, { credentials: 'same-origin' });
                 if (!res.ok) return;
+
                 const data = await res.json();
+                if (data.error === 'unauthorized') {
+                    window.location.href = '/login';
+                    return;
+                }
                 if (data.error) return;
 
                 const alertContainer = document.getElementById('alert-container');
+                alertContainer.textContent = '';
                 if (data.errors && data.errors.length > 0) {
-                    let html = `<div class="alert"><strong>Awarie (${data.errors.length})</strong><div class="error-list">`;
+                    const alert = document.createElement('div');
+                    alert.className = 'alert';
+
+                    const strong = document.createElement('strong');
+                    strong.textContent = `Awarie (${data.errors.length})`;
+                    alert.appendChild(strong);
+
+                    const list = document.createElement('div');
+                    list.className = 'error-list';
+
                     data.errors.slice(0, 12).forEach(err => {
-                        html += `<span class="error-item">${err.client_id} <small>(${err.ip})</small></span>`;
+                        const span = document.createElement('span');
+                        span.className = 'error-item';
+                        span.appendChild(document.createTextNode(err.client_id || ''));
+                        const small = document.createElement('small');
+                        small.textContent = ` (${err.ip || ''})`;
+                        span.appendChild(small);
+                        list.appendChild(span);
                     });
+
                     if (data.errors.length > 12) {
-                        html += `<span class="error-item">+${data.errors.length - 12}</span>`;
+                        const more = document.createElement('span');
+                        more.className = 'error-item';
+                        more.textContent = `+${data.errors.length - 12}`;
+                        list.appendChild(more);
                     }
-                    html += `</div></div>`;
-                    alertContainer.innerHTML = html;
-                } else {
-                    alertContainer.innerHTML = '';
+
+                    alert.appendChild(list);
+                    alertContainer.appendChild(alert);
                 }
 
                 data.clients.forEach(client => {
-                    const row = document.querySelector(`tr[data-id="${client.client_id}"]`);
+                    const row = findRowByClientId(client.client_id);
                     if (!row) return;
                     const cell = row.querySelector('.status-cell');
                     if (!cell) return;
 
+                    cell.textContent = '';
+
                     if (client.status === 'ok') {
-                        cell.innerHTML = `<span class="dot dot-ok"></span><span class="status-ok">OK</span>` +
-                            (client.last_seen ? `<span class="ping">ostatnio: ${client.last_seen}</span>` : '');
+                        const dot = document.createElement('span');
+                        dot.className = 'dot dot-ok';
+                        cell.appendChild(dot);
+
+                        const status = document.createElement('span');
+                        status.className = 'status-ok';
+                        status.textContent = 'OK';
+                        cell.appendChild(status);
+
+                        if (client.last_seen) {
+                            const ping = document.createElement('span');
+                            ping.className = 'ping';
+                            ping.textContent = `ostatnio: ${client.last_seen}`;
+                            cell.appendChild(ping);
+                        }
                     } else {
-                        cell.innerHTML = `<span class="dot dot-error"></span><span class="status-error">Awaria</span>` +
-                            (client.error_time ? `<span class="ping">${client.error_time}</span>` : '');
+                        const dot = document.createElement('span');
+                        dot.className = 'dot dot-error';
+                        cell.appendChild(dot);
+
+                        const status = document.createElement('span');
+                        status.className = 'status-error';
+                        status.textContent = 'Awaria';
+                        cell.appendChild(status);
+
+                        if (client.error_time) {
+                            const ping = document.createElement('span');
+                            ping.className = 'ping duration';
+                            ping.dataset.start = client.error_time;
+                            ping.textContent = formatDuration(client.error_time);
+                            cell.appendChild(ping);
+                        }
                     }
                 });
+
+                updateDurations();
             } catch (e) {
                 console.error('Błąd odświeżania:', e);
             }
         }
 
         setInterval(refreshStatuses, 8000);
+        setInterval(updateDurations, 30000);
         refreshStatuses();
+        updateDurations();
     </script>
 </body>
 </html>

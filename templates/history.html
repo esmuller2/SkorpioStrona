@@ -28,6 +28,10 @@
             <a href="/history">Wyczyść</a>
         </form>
 
+        <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Tej operacji nie można cofnąć.')">
+    <button type="submit" class="btn-danger">Wyczyść historię</button>
+</form>
+
         <p class="info">Znaleziono: {{ history|length }} wpisów</p>
 
         <table>

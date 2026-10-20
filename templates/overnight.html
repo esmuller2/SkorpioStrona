@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Raport nocny (17:00–09:00)</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Raport nocny (17:00–09:00)</h1>
+            <div class="header-right">
+                <a href="/" class="logout">← Lista klientów</a>
+                <a href="/logout" class="logout">Wyloguj</a>
+            </div>
+        </div>
+
+        <form method="get" action="/overnight" class="controls">
+            <label>Od: <input type="date" name="date_from" value="{{ date_from }}"></label>
+            <label>Do: <input type="date" name="date_to" value="{{ date_to }}"></label>
+            <button type="submit">Filtruj</button>
+            <a href="/overnight" class="btn btn-secondary">Wyczyść</a>
+        </form>
+
+        <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Raport nocny też zostanie wyczyszczony.')">
+    <button type="submit" class="btn-danger">Wyczyść historię</button>
+</form>
+
+        <p style="color:var(--muted); font-size:14px;">
+            Awarie, które zaczęły się lub trwały poza godzinami pracy (17:00–09:00).
+            Łącznie: {{ history|length }}
+        </p>
+
+        <table>
+            <tr>
+                <th>ID Klienta</th>
+                <th>Start</th>
+                <th>Koniec</th>
+                <th>Czas trwania</th>
+            </tr>
+            {% for item in history %}
+            <tr>
+                <td>{{ item.client_id|e }}</td>
+                <td>{{ item.started_at }}</td>
+                <td>{{ item.ended_at or "trwa" }}</td>
+                <td>{{ item.duration }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" style="text-align:center; color:var(--muted);">Brak awarii w tym okresie</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+</body>
+</html>

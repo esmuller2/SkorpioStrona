@@ -236,3 +236,36 @@ def cleanup_old_failures(days: int = 90):
             (cutoff,)
         )
         return cursor.rowcount
+
+def get_overnight_failures(date_from: str = None, date_to: str = None):
+    """Awarie z okresu 17:00–09:00."""
+    with get_db() as conn:
+        query = """
+            SELECT * FROM failure_history
+            WHERE (
+                (strftime('%H:%M', started_at) >= '17:00' OR strftime('%H:%M', started_at) < '09:00')
+                OR
+                (ended_at IS NOT NULL AND (
+                    strftime('%H:%M', ended_at) >= '17:00' OR strftime('%H:%M', ended_at) < '09:00'
+                ))
+                OR
+                (ended_at IS NULL)
+            )
+        """
+        params = []
+        if date_from:
+            query += " AND started_at >= ?"
+            params.append(date_from)
+        if date_to:
+            query += " AND started_at <= ?"
+            params.append(date_to + " 23:59:59")
+
+        query += " ORDER BY started_at DESC LIMIT 500"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+def clear_failure_history() -> int:
+    """Usuwa całą historię awarii. Zwraca liczbę usuniętych rekordów."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM failure_history")
+        return cursor.rowcount
