@@ -19,19 +19,21 @@
         {% if msg %}<div class="msg-success">{{ msg }}</div>{% endif %}
         {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
 
-        <form method="get" action="/history" class="controls">
-            <input type="text" name="client_id" placeholder="ID klienta" value="{{ client_id|e }}">
-            <label>Od: <input type="date" name="date_from" value="{{ date_from }}"></label>
-            <label>Do: <input type="date" name="date_to" value="{{ date_to }}"></label>
-            <label><input type="checkbox" name="only_open" {% if only_open %}checked{% endif %}> Tylko otwarte</label>
-            <button type="submit">Filtruj</button>
-            <a href="/history" class="btn btn-secondary">Wyczyść filtry</a>
+        <div class="controls">
+            <form method="get" action="/history" style="display:inline;">
+                <input type="text" name="client_id" placeholder="ID klienta" value="{{ client_id|e }}">
+                <label>Od: <input type="date" name="date_from" value="{{ date_from }}"></label>
+                <label>Do: <input type="date" name="date_to" value="{{ date_to }}"></label>
+                <label><input type="checkbox" name="only_open" {% if only_open %}checked{% endif %}> Tylko otwarte</label>
+                <button type="submit">Filtruj</button>
+                <a href="/history" class="btn btn-secondary">Wyczyść filtry</a>
+            </form>
             <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Tej operacji nie można cofnąć.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="next" value="/history">
                 <button type="submit" class="btn-danger">Wyczyść historię</button>
             </form>
-        </form>
+        </div>
 
         <p style="color:var(--muted); font-size:14px;">
             Łącznie: {{ history|length }}

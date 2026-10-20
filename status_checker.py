@@ -94,28 +94,42 @@ def refresh_all_statuses():
         logger.info("=== Rozpoczynam sprawdzanie statusów ===")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        arp_table: set[str] = set()
+        local_ok = False
+        ssh_ok = False
+
+        # Lokalny ARP
         local_arp = get_local_arp()
-        if local_arp is None:
-            logger.error("Nie udało się odczytać lokalnego ARP — pomijam aktualizację statusów")
-            return
+        if local_arp is not None:
+            arp_table.update(local_arp)
+            local_ok = True
+            logger.info(f"Lokalny ARP: {len(local_arp)} wpisów")
+        else:
+            logger.warning("Nie udało się odczytać lokalnego ARP")
 
-        arp_table: set[str] = local_arp
-
+        # Urządzenia SSH — zawsze próbujemy
         devices = load_devices()
-        device_failed = False
         if devices:
             for dev in devices:
                 device_arp = get_arp_with_retry(dev)
-                if device_arp is None:
-                    logger.warning(f"Urządzenie {dev.get('name', dev['host'])} nie odpowiedziało — kontynuuję z pozostałymi")
-                    device_failed = True
-                else:
+                if device_arp is not None:
                     arp_table.update(device_arp)
+                    ssh_ok = True
+                    logger.info(f"SSH {dev.get('name', dev['host'])}: {len(device_arp)} wpisów")
+                else:
+                    logger.warning(f"Urządzenie {dev.get('name', dev['host'])} nie odpowiedziało")
         else:
-            logger.info("Brak urządzeń SSH — używam tylko lokalnego ARP")
+            logger.info("Brak urządzeń SSH")
 
-        if device_failed and not devices:
-            pass  # już obsłużone
+        # Nie aktualizuj statusów, jeśli nie mamy żadnych danych
+        if not local_ok and not ssh_ok:
+            logger.error("Brak jakichkolwiek danych ARP — pomijam aktualizację statusów")
+            return
+
+        # Dodatkowa ochrona: jeśli mamy tylko lokalny ARP i jest on bardzo mały
+        if local_ok and not ssh_ok and len(arp_table) < 3:
+            logger.warning(f"Tylko lokalny ARP z {len(arp_table)} wpisami — pomijam aktualizację (ryzyko fałszywych awarii)")
+            return
 
         logger.info(f"Łącznie wpisów ARP: {len(arp_table)}")
 
@@ -138,7 +152,6 @@ def refresh_all_statuses():
                     database.update_client_status(client_id, "ok", last_seen=now)
             else:
                 if old_status != "error":
-                    # Tylko jeśli mamy potwierdzony odczyt ARP
                     start_time = last_seen if last_seen else now
                     database.log_failure_start(client_id, started_at=start_time)
                     database.update_client_status(client_id, "error", error_time=start_time)
