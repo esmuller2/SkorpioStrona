@@ -13,7 +13,10 @@
             <div class="header-right">
                 <button class="theme-toggle" id="themeToggle" title="Tryb ciemny">🌙</button>
                 <span class="clock" id="clock">--:--:--</span>
-                <a href="/logout" class="logout">Wyloguj</a>
+                <form method="post" action="/logout" style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="logout-button">Wyloguj</button>
+                </form>
             </div>
         </div>
 
@@ -192,13 +195,13 @@
             try {
                 const url = `/api/clients?page=${encodeURIComponent(page)}&search=${encodeURIComponent(search)}&status_filter=${encodeURIComponent(statusFilter)}`;
                 const res = await fetch(url, { credentials: 'same-origin' });
-                if (!res.ok) return;
-
-                const data = await res.json();
-                if (data.error === 'unauthorized') {
+                if (res.status === 401) {
                     window.location.href = '/login';
                     return;
                 }
+                if (!res.ok) return;
+
+                const data = await res.json();
                 if (data.error) return;
 
                 const alertContainer = document.getElementById('alert-container');

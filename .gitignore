@@ -1,0 +1,16 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite3
+*.db
+backups/
+clients_test.sqlite3
+test-clients.csv
+devices.json
+known_hosts
+*.log
+.pytest_cache/
+.mypy_cache/

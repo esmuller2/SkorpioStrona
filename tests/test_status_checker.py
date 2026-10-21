@@ -1,0 +1,85 @@
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import database
+import status_checker
+
+
+class StatusCheckerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_patch = patch.object(
+            database, "DB_PATH", Path(self.temp_dir.name) / "monitor.sqlite3"
+        )
+        self.db_patch.start()
+        database.init_db()
+        self.lock_patch = patch.object(status_checker, "refresh_lock")
+        self.lock_patch.start()
+        status_checker.refresh_lock.acquire.return_value = True
+
+    def tearDown(self):
+        self.lock_patch.stop()
+        self.db_patch.stop()
+        self.temp_dir.cleanup()
+
+    def configure_device(self, networks):
+        path = Path(self.temp_dir.name) / "devices.json"
+        path.write_text(json.dumps([{
+            "name": "test-router",
+            "host": "192.0.2.1",
+            "username": "monitor",
+            "password_env": "TEST_ROUTER_PASSWORD",
+            "networks": networks,
+        }]), encoding="utf-8")
+        self.addCleanup(path.unlink, missing_ok=True)
+        self.env_patch = patch.dict(os.environ, {"TEST_ROUTER_PASSWORD": "test-password"})
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
+        return patch.object(status_checker, "DEVICES_PATH", path)
+
+    def test_missing_device_config_aborts_refresh(self):
+        missing_path = Path(self.temp_dir.name) / "missing.json"
+        with patch.object(status_checker, "DEVICES_PATH", missing_path):
+            self.assertFalse(status_checker.refresh_all_statuses())
+
+    def test_complete_snapshot_updates_database_atomically(self):
+        database.add_client("UP", "192.168.1.10")
+        database.add_client("DOWN", "192.168.1.11")
+        network_patch = self.configure_device(["192.168.1.0/24"])
+        with network_patch:
+            with patch.object(
+                status_checker, "get_arp_with_retry",
+                return_value={"192.168.1.10", "192.168.1.1"}
+            ):
+                self.assertTrue(status_checker.refresh_all_statuses())
+        clients = {item["client_id"]: item for item in database.get_all_clients()}
+        self.assertEqual(clients["UP"]["status"], "ok")
+        self.assertEqual(clients["DOWN"]["status"], "error")
+
+    def test_unverified_network_leaves_all_statuses_unchanged(self):
+        database.add_client("UP", "192.168.1.10")
+        network_patch = self.configure_device(["192.168.1.0/24"])
+        with network_patch:
+            with patch.object(
+                status_checker, "get_arp_with_retry",
+                return_value={"10.0.0.5"}
+            ):
+                self.assertFalse(status_checker.refresh_all_statuses())
+        client = database.get_all_clients()[0]
+        self.assertEqual(client["status"], "ok")
+
+    def test_empty_arp_does_not_change_status(self):
+        database.add_client("A", "192.168.1.10")
+        network_patch = self.configure_device(["192.168.1.0/24"])
+        with network_patch:
+            with patch.object(status_checker, "get_arp_with_retry", return_value=set()):
+                self.assertFalse(status_checker.refresh_all_statuses())
+        self.assertEqual(database.get_all_clients()[0]["status"], "ok")
+
+
+if __name__ == "__main__":
+    unittest.main()

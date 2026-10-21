@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -10,16 +10,20 @@ from dotenv import load_dotenv
 import bcrypt
 import os
 import ipaddress
+import logging
 import time
 import secrets
 from collections import defaultdict
+from threading import Lock
 import csv
 import io
 from datetime import datetime
+from urllib.parse import urlencode
 import database
 import status_checker
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
+logger = logging.getLogger(__name__)
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -33,32 +37,41 @@ if not SECRET_KEY or not PASSWORD_HASH:
     )
 
 login_attempts = defaultdict(list)
+login_attempts_lock = Lock()
 MAX_ATTEMPTS = 5
 LOCK_TIME = 300
 
 def get_client_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
     return "unknown"
 
 def is_locked(ip: str) -> bool:
     now = time.time()
-    login_attempts[ip] = [t for t in login_attempts[ip] if now - t < LOCK_TIME]
-    return len(login_attempts[ip]) >= MAX_ATTEMPTS
+    with login_attempts_lock:
+        for address, attempts in list(login_attempts.items()):
+            recent = [timestamp for timestamp in attempts if now - timestamp < LOCK_TIME]
+            if recent:
+                login_attempts[address] = recent
+            else:
+                login_attempts.pop(address, None)
+        return len(login_attempts.get(ip, [])) >= MAX_ATTEMPTS
+
+def record_login_failure(ip: str) -> None:
+    with login_attempts_lock:
+        login_attempts[ip].append(time.time())
 
 def generate_csrf_token(request: Request) -> str:
-    token = secrets.token_urlsafe(32)
-    request.session["csrf_token"] = token
-    return token
+    token = request.session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        request.session["csrf_token"] = token
+    return str(token)
 
-def validate_csrf(request: Request, token: str) -> bool:
+def validate_csrf(request: Request, token: str | None) -> bool:
     expected = request.session.get("csrf_token")
     if not expected or not token or not secrets.compare_digest(expected, token):
         return False
-    request.session.pop("csrf_token", None)
     return True
 
 scheduler = BackgroundScheduler()
@@ -70,7 +83,10 @@ async def lifespan(app: FastAPI):
         "interval",
         seconds=30,
         id="status_refresh",
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(),
     )
     scheduler.add_job(
         database.backup_database,
@@ -89,9 +105,11 @@ async def lifespan(app: FastAPI):
         replace_existing=True
     )
     scheduler.start()
-    print("Scheduler uruchomiony (statusy co 30s, backup 03:00, czyszczenie 03:30)")
-    yield
-    scheduler.shutdown()
+    logger.info("Scheduler uruchomiony (statusy co 30s, backup 03:00, czyszczenie 03:30)")
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
 
 app = FastAPI(title="Huawei Clients Monitor", lifespan=lifespan)
 
@@ -112,6 +130,28 @@ database.init_db()
 def get_current_user(request: Request):
     return request.session.get("user")
 
+def parse_date_range(date_from: str | None, date_to: str | None) -> tuple[str | None, str | None]:
+    parsed = []
+    for value in (date_from, date_to):
+        if not value:
+            parsed.append(None)
+            continue
+        try:
+            parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Nieprawidłowy format daty") from exc
+        if parsed_date.isoformat() != value:
+            raise HTTPException(status_code=400, detail="Nieprawidłowy format daty")
+        parsed.append(value)
+    if parsed[0] and parsed[1] and parsed[0] > parsed[1]:
+        raise HTTPException(status_code=400, detail="Data początkowa jest późniejsza niż końcowa")
+    return parsed[0], parsed[1]
+
+def safe_csv_value(value):
+    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
+    return value
+
 @app.get("/login")
 def login_page(request: Request):
     if get_current_user(request):
@@ -126,8 +166,8 @@ def login_page(request: Request):
 @app.post("/login")
 def login(
     request: Request,
-    password: str = Form(...),
-    csrf_token: str = Form(...)
+    password: str | None = Form(None),
+    csrf_token: str | None = Form(None)
 ):
     client_ip = get_client_ip(request)
 
@@ -152,7 +192,7 @@ def login(
         )
 
     if not password or len(password) > 128:
-        login_attempts[client_ip].append(time.time())
+        record_login_failure(client_ip)
         return templates.TemplateResponse(
             request=request,
             name="login.html",
@@ -166,13 +206,15 @@ def login(
         password_bytes = password.encode("utf-8")
         hash_bytes = PASSWORD_HASH.strip().strip('"').strip("'").encode("utf-8")
         if bcrypt.checkpw(password_bytes, hash_bytes):
+            request.session.clear()
             request.session["user"] = "admin"
-            login_attempts[client_ip].clear()
+            with login_attempts_lock:
+                login_attempts.pop(client_ip, None)
             return RedirectResponse(url="/", status_code=303)
-    except Exception:
-        pass
+    except ValueError:
+        logger.error("Nieprawidłowy format hasha hasła lub hasło przekracza limit bcrypt")
 
-    login_attempts[client_ip].append(time.time())
+    record_login_failure(client_ip)
     return templates.TemplateResponse(
         request=request,
         name="login.html",
@@ -182,8 +224,13 @@ def login(
         }
     )
 
-@app.get("/logout")
-def logout(request: Request):
+@app.post("/logout")
+def logout(request: Request, csrf_token: str | None = Form(None)):
+    if not validate_csrf(request, csrf_token):
+        return RedirectResponse(
+            url=f"/login?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
+            status_code=303
+        )
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
 
@@ -237,19 +284,12 @@ def history_page(
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
 
-    def valid_date(d: str | None) -> str | None:
-        if not d:
-            return None
-        try:
-            datetime.strptime(d, "%Y-%m-%d")
-            return d
-        except ValueError:
-            return None
+    date_from, date_to = parse_date_range(date_from, date_to)
 
     history = database.get_failure_history_filtered(
         client_id=client_id,
-        date_from=valid_date(date_from),
-        date_to=valid_date(date_to),
+        date_from=date_from,
+        date_to=date_to,
         only_open=only_open,
         limit=300
     )
@@ -280,18 +320,11 @@ def overnight_page(
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
 
-    def valid_date(d: str | None) -> str | None:
-        if not d:
-            return None
-        try:
-            datetime.strptime(d, "%Y-%m-%d")
-            return d
-        except ValueError:
-            return None
+    date_from, date_to = parse_date_range(date_from, date_to)
 
     history = database.get_overnight_failures(
-        date_from=valid_date(date_from),
-        date_to=valid_date(date_to)
+        date_from=date_from,
+        date_to=date_to
     )
 
     return templates.TemplateResponse(
@@ -318,11 +351,11 @@ def export_csv(request: Request):
     writer.writerow(["ID Klienta", "Adres IP", "Status", "Czas awarii", "Ping (ms)"])
     for c in clients:
         writer.writerow([
-            c["client_id"],
-            c["ip"],
-            c["status"],
-            c.get("error_time") or "",
-            c.get("ping_ms") or ""
+            safe_csv_value(c["client_id"]),
+            safe_csv_value(c["ip"]),
+            safe_csv_value(c["status"]),
+            safe_csv_value(c.get("error_time") or ""),
+            c.get("ping_ms") if c.get("ping_ms") is not None else ""
         ])
     output.seek(0)
     return StreamingResponse(
@@ -336,7 +369,7 @@ def add_client(
     request: Request,
     client_id: str = Form(...),
     ip: str = Form(...),
-    csrf_token: str = Form(...)
+    csrf_token: str | None = Form(None)
 ):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
@@ -349,7 +382,9 @@ def add_client(
     if not client_id or len(client_id) > 50 or len(client_id) < 1:
         return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
     try:
-        ipaddress.ip_address(ip)
+        parsed_ip = ipaddress.ip_address(ip)
+        if parsed_ip.version != 4:
+            raise ValueError("IPv4 required")
     except ValueError:
         return RedirectResponse(url="/?error=Nieprawidłowy adres IP", status_code=303)
 
@@ -360,7 +395,7 @@ def add_client(
 def delete_client(
     request: Request,
     client_id: str = Form(...),
-    csrf_token: str = Form(...)
+    csrf_token: str | None = Form(None)
 ):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
@@ -375,7 +410,7 @@ def edit_client(
     old_client_id: str = Form(...),
     new_client_id: str = Form(...),
     new_ip: str = Form(...),
-    csrf_token: str = Form(...)
+    csrf_token: str | None = Form(None)
 ):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
@@ -388,7 +423,9 @@ def edit_client(
     if not new_client_id or len(new_client_id) > 50 or len(new_client_id) < 1:
         return RedirectResponse(url="/?error=Nieprawidłowe ID klienta", status_code=303)
     try:
-        ipaddress.ip_address(new_ip)
+        parsed_ip = ipaddress.ip_address(new_ip)
+        if parsed_ip.version != 4:
+            raise ValueError("IPv4 required")
     except ValueError:
         return RedirectResponse(url="/?error=Nieprawidłowy adres IP", status_code=303)
 
@@ -396,49 +433,65 @@ def edit_client(
     return RedirectResponse(url=f"/?{'msg' if success else 'error'}={message}", status_code=303)
 
 @app.post("/refresh-status")
-def refresh_status(request: Request, csrf_token: str = Form(...)):
+def refresh_status(request: Request, csrf_token: str | None = Form(None)):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
     if not validate_csrf(request, csrf_token):
-        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+        return RedirectResponse(
+            url=f"/?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
+            status_code=303
+        )
     refreshed = status_checker.refresh_all_statuses()
     if not refreshed:
         return RedirectResponse(
-            url="/?error=Nie udało się odświeżyć statusów. Sprawdź logi serwera.",
+            url=f"/?{urlencode({'error': 'Nie udało się odświeżyć statusów. Sprawdź logi serwera.'})}",
             status_code=303
         )
     return RedirectResponse(url="/?msg=Statusy zostały odświeżone", status_code=303)
 
 @app.post("/backup-now")
-def backup_now(request: Request, csrf_token: str = Form(...)):
+def backup_now(request: Request, csrf_token: str | None = Form(None)):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
     if not validate_csrf(request, csrf_token):
-        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+        return RedirectResponse(
+            url=f"/?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
+            status_code=303
+        )
     path = database.backup_database()
     return RedirectResponse(url=f"/?msg=Backup zapisany: {path.name}", status_code=303)
 
 @app.post("/cleanup-now")
-def cleanup_now(request: Request, csrf_token: str = Form(...)):
+def cleanup_now(request: Request, csrf_token: str | None = Form(None)):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
     if not validate_csrf(request, csrf_token):
-        return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+        return RedirectResponse(
+            url=f"/?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
+            status_code=303
+        )
     deleted = database.cleanup_old_failures(90)
     return RedirectResponse(url=f"/?msg=Usunięto {deleted} starych awarii", status_code=303)
 
 @app.post("/clear-history")
 def clear_history(
     request: Request,
-    csrf_token: str = Form(...),
+    csrf_token: str | None = Form(None),
     next: str = Form("/history")
 ):
+    next_path = next if next in {"/history", "/overnight"} else "/history"
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
     if not validate_csrf(request, csrf_token):
-        return RedirectResponse(url=f"{next}?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
+        return RedirectResponse(
+            url=f"{next_path}?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
+            status_code=303
+        )
     deleted = database.clear_failure_history()
-    return RedirectResponse(url=f"{next}?msg=Usunięto {deleted} wpisów historii", status_code=303)
+    return RedirectResponse(
+        url=f"{next_path}?{urlencode({'msg': f'Usunięto {deleted} wpisów historii'})}",
+        status_code=303
+    )
 
 @app.get("/api/clients")
 def api_clients(
@@ -448,7 +501,7 @@ def api_clients(
     status_filter: str = None,
 ):
     if not get_current_user(request):
-        return {"error": "unauthorized"}
+        raise HTTPException(status_code=401, detail="unauthorized")
 
     per_page = 100
     _, total = database.get_clients_paginated(search, 1, 1, status_filter)

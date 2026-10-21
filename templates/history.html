@@ -12,7 +12,10 @@
             <h1>Historia awarii</h1>
             <div class="header-right">
                 <a href="/" class="logout">← Lista klientów</a>
-                <a href="/logout" class="logout">Wyloguj</a>
+                <form method="post" action="/logout" style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="logout-button">Wyloguj</button>
+                </form>
             </div>
         </div>
 
