@@ -86,7 +86,7 @@ class StatusCheckerTests(unittest.TestCase):
         self.assertEqual(clients["UP"]["status"], "ok")
         self.assertEqual(clients["DOWN"]["status"], "error")
 
-    def test_unverified_network_leaves_all_statuses_unchanged(self):
+    def test_uncovered_network_marks_clients_offline(self):
         database.add_client("UP", "192.168.1.10")
         network_patch = self.configure_device(["192.168.1.0/24"])
         with network_patch:
@@ -94,9 +94,9 @@ class StatusCheckerTests(unittest.TestCase):
                 status_checker, "get_arp_with_retry",
                 return_value={"10.0.0.5"}
             ):
-                self.assertFalse(status_checker.refresh_all_statuses())
+                self.assertTrue(status_checker.refresh_all_statuses())
         client = database.get_all_clients()[0]
-        self.assertEqual(client["status"], "ok")
+        self.assertEqual(client["status"], "error")
 
     def test_empty_arp_does_not_change_status(self):
         database.add_client("A", "192.168.1.10")

@@ -197,35 +197,16 @@ def refresh_all_statuses() -> bool:
             return True
 
         arp_table: set[str] = set()
-        verified_networks = set()
         for dev, device_arp in reports:
             arp_table.update(device_arp)
-            for network in dev["networks"]:
-                if any(ipaddress.ip_address(ip) in network for ip in device_arp):
-                    verified_networks.add(network)
 
-        if not arp_table:
+        if not arp_table and not any(dev.get("type") == "local" for dev, _ in reports):
             logger.error("Brak danych ARP; odświeżenie anulowane")
             return False
 
-        for client in clients:
-            try:
-                client_ip = ipaddress.ip_address(client["ip"])
-            except ValueError:
-                logger.error("Klient %s ma nieprawidłowy IP; odświeżenie anulowane", client["client_id"])
-                return False
-            if client_ip.version != 4 or not any(
-                client_ip in network for network in verified_networks
-            ):
-                logger.error(
-                    "Brak potwierdzonego pokrycia ARP dla klienta %s (%s); odświeżenie anulowane",
-                    client["client_id"], client["ip"]
-                )
-                return False
-
         logger.info(
-            "Zebrano %s adresów ARP z %s urządzeń; pokrycie potwierdzone dla %s klientów",
-            len(arp_table), active_devices, len(clients)
+            "Zebrano %s adresów ARP z %s urządzeń",
+            len(arp_table), active_devices
         )
         total, online, offline = database.apply_status_snapshot(arp_table, now)
 
