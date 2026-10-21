@@ -26,13 +26,14 @@ class StatusCheckerTests(unittest.TestCase):
         self.db_patch.stop()
         self.temp_dir.cleanup()
 
-    def configure_device(self, networks):
+    def configure_device(self, networks, arp_command="ip neigh"):
         path = Path(self.temp_dir.name) / "devices.json"
         path.write_text(json.dumps([{
             "name": "test-router",
             "host": "192.0.2.1",
             "username": "monitor",
             "password_env": "TEST_ROUTER_PASSWORD",
+            "arp_command": arp_command,
             "networks": networks,
         }]), encoding="utf-8")
         self.addCleanup(path.unlink, missing_ok=True)
@@ -40,6 +41,18 @@ class StatusCheckerTests(unittest.TestCase):
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         return patch.object(status_checker, "DEVICES_PATH", path)
+
+    def test_configured_arp_command_is_used_for_router(self):
+        network_patch = self.configure_device(["192.168.1.0/24"], "show arp")
+        with network_patch:
+            device = status_checker.load_devices()[0]
+        with patch.object(
+            status_checker.huawei, "get_arp_table", return_value={"192.168.1.1"}
+        ) as get_arp_table:
+            self.assertEqual(
+                status_checker.get_arp_with_retry(device), {"192.168.1.1"}
+            )
+        self.assertEqual(get_arp_table.call_args.kwargs["command"], "show arp")
 
     def test_missing_device_config_aborts_refresh(self):
         missing_path = Path(self.temp_dir.name) / "missing.json"

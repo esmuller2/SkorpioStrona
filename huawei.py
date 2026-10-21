@@ -6,7 +6,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 KNOWN_HOSTS = Path(__file__).resolve().parent / "known_hosts"
 
-def get_arp_table(host: str, username: str, password: str, port: int = 22) -> set[str] | None:
+def get_arp_table(
+    host: str,
+    username: str,
+    password: str,
+    port: int = 22,
+    command: str = "display arp",
+) -> set[str] | None:
     """Zwraca IPv4 z tablicy ARP albo None, jeśli połączenie/odczyt się nie powiódł."""
     client = paramiko.SSHClient()
     try:
@@ -23,7 +29,7 @@ def get_arp_table(host: str, username: str, password: str, port: int = 22) -> se
             banner_timeout=10,
             auth_timeout=10,
         )
-        stdin, stdout, stderr = client.exec_command("display arp", timeout=15)
+        stdin, stdout, stderr = client.exec_command(command, timeout=15)
         stdout.channel.set_combine_stderr(True)
         output = stdout.read().decode(errors="ignore")
         exit_status = stdout.channel.recv_exit_status()

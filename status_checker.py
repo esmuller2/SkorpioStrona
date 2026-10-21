@@ -41,6 +41,7 @@ def load_devices() -> list[dict]:
         host = item.get("host")
         username = item.get("username")
         password_env = item.get("password_env")
+        arp_command = item.get("arp_command", "display arp")
         networks = item.get("networks")
         port = item.get("port", 22)
         if not isinstance(host, str) or not host.strip():
@@ -49,6 +50,8 @@ def load_devices() -> list[dict]:
             raise DeviceConfigurationError(f"Urządzenie {host}: brak username")
         if not isinstance(password_env, str) or not password_env.strip():
             raise DeviceConfigurationError(f"Urządzenie {host}: brak password_env")
+        if not isinstance(arp_command, str) or not arp_command.strip():
+            raise DeviceConfigurationError(f"Urządzenie {host}: brak arp_command")
         password = os.getenv(password_env)
         if not password:
             raise DeviceConfigurationError(
@@ -79,6 +82,7 @@ def load_devices() -> list[dict]:
             "username": username.strip(),
             "password": password,
             "port": port,
+            "arp_command": arp_command.strip(),
             "networks": parsed_networks,
         })
     return devices
@@ -97,6 +101,7 @@ def get_arp_with_retry(dev: dict) -> set[str] | None:
                 username=dev["username"],
                 password=dev["password"],
                 port=port,
+                command=dev["arp_command"],
             )
             if arp is not None:
                 logger.info(f"{name} → {len(arp)} wpisów ARP")

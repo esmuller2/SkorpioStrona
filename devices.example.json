@@ -1,10 +1,11 @@
 [
   {
-    "name": "Router LAN",
+    "name": "Router testowy",
     "host": "192.0.2.1",
     "port": 22,
     "username": "monitor",
-    "password_env": "HUAWEI_ROUTER_PASSWORD",
+    "password_env": "ROUTER_SSH_PASSWORD",
+    "arp_command": "REPLACE_WITH_ROUTER_ARP_COMMAND",
     "networks": [
       "192.168.1.0/24"
     ]
