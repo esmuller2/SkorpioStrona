@@ -107,6 +107,11 @@ def load_devices() -> list[dict]:
             "port": port,
             "arp_command": arp_command.strip(),
         })
+        if device_type == "telnet":
+            logger.warning(
+                "%s: type=telnet — połączenie nieszyfrowane, używaj tylko w zaufanej sieci",
+                host,
+            )
         devices.append(base)
 
     return devices
@@ -123,11 +128,19 @@ def get_arp_with_retry(dev: dict) -> set[str] | None:
         return set()
 
     if device_type == "local":
-        logger.info(f"{name} (type=local) → ping klientów, potem lokalne ARP")
+        logger.info("%s (type=local) → ping klientów, potem lokalne ARP", name)
         clients = database.get_all_clients()
         ips = [c["ip"] for c in clients if c.get("ip")]
-        local_arp.ping_ips(ips)
-        return local_arp.get_local_arp()
+        pinged = local_arp.ping_ips(ips)
+        arp = local_arp.get_local_arp()
+        if arp is None:
+            return None
+        matched = sum(1 for ip in ips if ip in arp)
+        logger.info(
+            "%s: spingowano %s, w ARP %s adresów, dopasowano %s klientów",
+            name, pinged, len(arp), matched,
+        )
+        return arp
 
     port = dev.get("port", 22 if device_type == "ssh" else 23)
     for attempt in range(1, MAX_RETRIES + 1):

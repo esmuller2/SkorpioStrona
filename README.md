@@ -6,9 +6,11 @@ Lokalna aplikacja FastAPI do ewidencji klientów IPv4, odczytu tablic ARP urząd
 
 - Python 3.10 lub nowszy.
 - Dla urządzeń `type: "ssh"`: dostęp SSH oraz konto z prawem wykonania skonfigurowanej komendy ARP.
-- Dla urządzeń `type: "telnet"`: dostęp Telnet.
-- Urządzenia `type: "none"` są pomijane (np. testowy Netis bez CLI).
+- Dla urządzeń `type: "telnet"`: dostęp Telnet. **Uwaga:** Telnet jest nieszyfrowany — używaj tylko w zaufanej sieci lokalnej.
+- Urządzenia `type: "none"` są pomijane (np. gdy nie chcesz ich odpytywać).
+- Urządzenia `type: "local"` używają pingu klientów z bazy i lokalnej tablicy ARP systemu.
 - Zaufane klucze SSH zapisane w systemowym `known_hosts` albo w pliku `known_hosts` w katalogu projektu.
+- Na produkcji ustaw `HTTPS_ONLY=true`. Opcjonalnie `SESSION_MAX_AGE` (sekundy, domyślnie 8 godzin).
 
 ## Instalacja i uruchomienie
 

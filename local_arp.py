@@ -7,10 +7,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
-def ping_ips(ips: list[str], timeout_ms: int = 1000, max_workers: int = 20) -> None:
-    """Pinguje listę adresów IPv4 (Windows: ping -n 1 -w, Linux: ping -c 1 -W)."""
-    if not ips:
-        return
+def ping_ips(ips: list[str], timeout_ms: int = 800, max_workers: int = 12) -> int:
+    """Pinguje listę adresów IPv4. Zwraca liczbę uruchomionych pingów."""
+    unique = []
+    seen = set()
+    for ip in ips:
+        if ip and ip not in seen:
+            seen.add(ip)
+            unique.append(ip)
+    if not unique:
+        logger.info("Brak klientów do pingowania")
+        return 0
 
     system = platform.system().lower()
     timeout_sec = max(1, timeout_ms // 1000)
@@ -30,12 +37,13 @@ def ping_ips(ips: list[str], timeout_ms: int = 1000, max_workers: int = 20) -> N
         except Exception:
             pass
 
-    logger.info("Pinguję %s klientów...", len(ips))
+    logger.info("Pinguję %s klientów (równolegle do %s)...", len(unique), max_workers)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_ping_one, ip) for ip in ips]
+        futures = [executor.submit(_ping_one, ip) for ip in unique]
         for _ in as_completed(futures):
             pass
-    logger.info("Ping zakończony")
+    logger.info("Ping zakończony (%s adresów)", len(unique))
+    return len(unique)
 
 def get_local_arp() -> set[str] | None:
     """Odczytuje lokalną tablicę ARP systemu (Windows: arp -a, Linux/macOS: arp -n)."""

@@ -55,11 +55,16 @@ def is_locked(ip: str) -> bool:
                 login_attempts[address] = recent
             else:
                 login_attempts.pop(address, None)
-        return len(login_attempts.get(ip, [])) >= MAX_ATTEMPTS
+        locked = len(login_attempts.get(ip, [])) >= MAX_ATTEMPTS
+        if locked:
+            logger.warning("Logowanie zablokowane dla %s (za dużo prób)", ip)
+        return locked
 
 def record_login_failure(ip: str) -> None:
     with login_attempts_lock:
         login_attempts[ip].append(time.time())
+        count = len(login_attempts[ip])
+    logger.warning("Nieudane logowanie z %s (%s/%s)", ip, count, MAX_ATTEMPTS)
 
 def generate_csrf_token(request: Request) -> str:
     token = request.session.get("csrf_token")
@@ -86,6 +91,7 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=15,
         next_run_time=datetime.now(),
     )
     scheduler.add_job(
@@ -117,7 +123,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
     session_cookie="session",
-    max_age=60 * 60 * 8,
+    max_age=int(os.getenv("SESSION_MAX_AGE", str(60 * 60 * 8))),
     same_site="lax",
     https_only=os.getenv("HTTPS_ONLY", "false").lower() == "true",
 )
