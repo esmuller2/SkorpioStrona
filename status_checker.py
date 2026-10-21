@@ -9,6 +9,7 @@ from pathlib import Path
 import database
 import huawei
 import telnet_client
+import local_arp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,9 +47,9 @@ def load_devices() -> list[dict]:
         host = host.strip()
 
         device_type = str(item.get("type", "ssh")).strip().lower()
-        if device_type not in ("ssh", "telnet", "none"):
+        if device_type not in ("ssh", "telnet", "none", "local"):
             raise DeviceConfigurationError(
-                f"Urządzenie {host}: nieobsługiwany type '{device_type}' (dozwolone: ssh, telnet, none)"
+                f"Urządzenie {host}: nieobsługiwany type '{device_type}' (dozwolone: ssh, telnet, local, none)"
             )
 
         networks = item.get("networks")
@@ -77,7 +78,7 @@ def load_devices() -> list[dict]:
             "networks": parsed_networks,
         }
 
-        if device_type == "none":
+        if device_type in ("none", "local"):
             devices.append(base)
             continue
 
@@ -120,6 +121,10 @@ def get_arp_with_retry(dev: dict) -> set[str] | None:
     if device_type == "none":
         logger.info(f"{name} (type=none) → pomijam odczyt ARP")
         return set()
+
+    if device_type == "local":
+        logger.info(f"{name} (type=local) → odczyt lokalnej tablicy ARP")
+        return local_arp.get_local_arp()
 
     port = dev.get("port", 22 if device_type == "ssh" else 23)
     for attempt in range(1, MAX_RETRIES + 1):
@@ -182,10 +187,10 @@ def refresh_all_statuses() -> bool:
             if device_arp is None:
                 logger.error("%s: brak wiarygodnego odczytu ARP; odświeżenie anulowane", dev["name"])
                 return False
-            if not device_arp:
+            if not device_arp and dev.get("type") != "local":
                 logger.error("%s: pusta tablica ARP; odświeżenie anulowane", dev["name"])
                 return False
-            reports.append((dev, device_arp))
+            reports.append((dev, device_arp or set()))
 
         if active_devices == 0:
             logger.info("Brak aktywnych urządzeń (tylko type=none) — statusy niezmienione")
