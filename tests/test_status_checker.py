@@ -26,21 +26,34 @@ class StatusCheckerTests(unittest.TestCase):
         self.db_patch.stop()
         self.temp_dir.cleanup()
 
-    def configure_device(self, networks, arp_command="ip neigh"):
+    def configure_device(self, networks, arp_command="ip neigh", device_type="ssh"):
         path = Path(self.temp_dir.name) / "devices.json"
-        path.write_text(json.dumps([{
+        device = {
             "name": "test-router",
+            "type": device_type,
             "host": "192.0.2.1",
             "username": "monitor",
             "password_env": "TEST_ROUTER_PASSWORD",
             "arp_command": arp_command,
             "networks": networks,
-        }]), encoding="utf-8")
+        }
+        if device_type == "none":
+            device.pop("username", None)
+            device.pop("password_env", None)
+            device.pop("arp_command", None)
+        path.write_text(json.dumps([device]), encoding="utf-8")
         self.addCleanup(path.unlink, missing_ok=True)
         self.env_patch = patch.dict(os.environ, {"TEST_ROUTER_PASSWORD": "test-password"})
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         return patch.object(status_checker, "DEVICES_PATH", path)
+
+    def test_none_type_is_skipped(self):
+        database.add_client("A", "192.168.1.10")
+        network_patch = self.configure_device(["192.168.1.0/24"], device_type="none")
+        with network_patch:
+            self.assertTrue(status_checker.refresh_all_statuses())
+        self.assertEqual(database.get_all_clients()[0]["status"], "ok")
 
     def test_configured_arp_command_is_used_for_router(self):
         network_patch = self.configure_device(["192.168.1.0/24"], "show arp")

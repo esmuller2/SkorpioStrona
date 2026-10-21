@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import database
 import huawei
+import telnet_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ class DeviceConfigurationError(ValueError):
 def load_devices() -> list[dict]:
     if not DEVICES_PATH.exists():
         raise DeviceConfigurationError(
-            f"Brak {DEVICES_PATH.name}; wymagane urządzenia SSH i zakresy sieci"
+            f"Brak {DEVICES_PATH.name}; wymagane urządzenia i zakresy sieci"
         )
     try:
         with open(DEVICES_PATH, encoding="utf-8") as f:
@@ -38,27 +39,19 @@ def load_devices() -> list[dict]:
     for index, item in enumerate(data):
         if not isinstance(item, dict):
             raise DeviceConfigurationError(f"Urządzenie nr {index + 1} musi być obiektem JSON")
+
         host = item.get("host")
-        username = item.get("username")
-        password_env = item.get("password_env")
-        arp_command = item.get("arp_command", "display arp")
-        networks = item.get("networks")
-        port = item.get("port", 22)
         if not isinstance(host, str) or not host.strip():
             raise DeviceConfigurationError(f"Urządzenie nr {index + 1}: brak host")
-        if not isinstance(username, str) or not username.strip():
-            raise DeviceConfigurationError(f"Urządzenie {host}: brak username")
-        if not isinstance(password_env, str) or not password_env.strip():
-            raise DeviceConfigurationError(f"Urządzenie {host}: brak password_env")
-        if not isinstance(arp_command, str) or not arp_command.strip():
-            raise DeviceConfigurationError(f"Urządzenie {host}: brak arp_command")
-        password = os.getenv(password_env)
-        if not password:
+        host = host.strip()
+
+        device_type = str(item.get("type", "ssh")).strip().lower()
+        if device_type not in ("ssh", "telnet", "none"):
             raise DeviceConfigurationError(
-                f"Urządzenie {host}: zmienna środowiskowa {password_env} nie jest ustawiona"
+                f"Urządzenie {host}: nieobsługiwany type '{device_type}' (dozwolone: ssh, telnet, none)"
             )
-        if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
-            raise DeviceConfigurationError(f"Urządzenie {host}: nieprawidłowy port")
+
+        networks = item.get("networks")
         if not isinstance(networks, list) or not networks:
             raise DeviceConfigurationError(f"Urządzenie {host}: wymagane są podsieci w networks")
 
@@ -72,19 +65,49 @@ def load_devices() -> list[dict]:
                 ) from exc
             if parsed.version != 4:
                 raise DeviceConfigurationError(
-                    f"Urządzenie {host}: monitoring ARP obsługuje obecnie tylko IPv4"
+                    f"Urządzenie {host}: monitoring obsługuje obecnie tylko IPv4"
                 )
             parsed_networks.append(parsed)
 
-        devices.append({
-            "name": str(item.get("name") or host),
-            "host": host.strip(),
+        name = str(item.get("name") or host)
+        base = {
+            "name": name,
+            "host": host,
+            "type": device_type,
+            "networks": parsed_networks,
+        }
+
+        if device_type == "none":
+            devices.append(base)
+            continue
+
+        username = item.get("username")
+        password_env = item.get("password_env")
+        arp_command = item.get("arp_command", "display arp" if device_type == "ssh" else "show arp")
+        port = item.get("port", 22 if device_type == "ssh" else 23)
+
+        if not isinstance(username, str) or not username.strip():
+            raise DeviceConfigurationError(f"Urządzenie {host}: brak username")
+        if not isinstance(password_env, str) or not password_env.strip():
+            raise DeviceConfigurationError(f"Urządzenie {host}: brak password_env")
+        if not isinstance(arp_command, str) or not arp_command.strip():
+            raise DeviceConfigurationError(f"Urządzenie {host}: brak arp_command")
+        password = os.getenv(password_env)
+        if not password:
+            raise DeviceConfigurationError(
+                f"Urządzenie {host}: zmienna środowiskowa {password_env} nie jest ustawiona"
+            )
+        if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+            raise DeviceConfigurationError(f"Urządzenie {host}: nieprawidłowy port")
+
+        base.update({
             "username": username.strip(),
             "password": password,
             "port": port,
             "arp_command": arp_command.strip(),
-            "networks": parsed_networks,
         })
+        devices.append(base)
+
     return devices
 
 MAX_RETRIES = 3
@@ -92,24 +115,43 @@ RETRY_DELAY = 2
 
 def get_arp_with_retry(dev: dict) -> set[str] | None:
     name = dev.get("name", dev["host"])
-    port = dev.get("port", 22)
+    device_type = dev.get("type", "ssh")
+
+    if device_type == "none":
+        logger.info(f"{name} (type=none) → pomijam odczyt ARP")
+        return set()
+
+    port = dev.get("port", 22 if device_type == "ssh" else 23)
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            logger.info(f"Pobieram ARP z {name} (próba {attempt}/{MAX_RETRIES})")
-            arp = huawei.get_arp_table(
-                host=dev["host"],
-                username=dev["username"],
-                password=dev["password"],
-                port=port,
-                command=dev["arp_command"],
-            )
+            logger.info(f"Pobieram ARP z {name} [{device_type}] (próba {attempt}/{MAX_RETRIES})")
+            if device_type == "ssh":
+                arp = huawei.get_arp_table(
+                    host=dev["host"],
+                    username=dev["username"],
+                    password=dev["password"],
+                    port=port,
+                    command=dev["arp_command"],
+                )
+            elif device_type == "telnet":
+                arp = telnet_client.get_arp_table(
+                    host=dev["host"],
+                    username=dev["username"],
+                    password=dev["password"],
+                    port=port,
+                    command=dev["arp_command"],
+                )
+            else:
+                logger.error(f"{name}: nieobsługiwany type {device_type}")
+                return None
+
             if arp is not None:
                 logger.info(f"{name} → {len(arp)} wpisów ARP")
                 return arp
             else:
                 logger.warning(f"{name} → błąd odczytu (próba {attempt})")
         except Exception as e:
-            logger.warning(f"{name} → błąd SSH (próba {attempt}): {type(e).__name__}: {e}")
+            logger.warning(f"{name} → błąd {device_type} (próba {attempt}): {type(e).__name__}: {e}")
 
         if attempt < MAX_RETRIES:
             time.sleep(RETRY_DELAY)
@@ -128,7 +170,14 @@ def refresh_all_statuses() -> bool:
         devices = load_devices()
         clients = database.get_all_clients()
         reports = []
+        active_devices = 0
+
         for dev in devices:
+            if dev.get("type") == "none":
+                logger.info("%s: type=none — urządzenie pominięte w odczycie", dev["name"])
+                continue
+
+            active_devices += 1
             device_arp = get_arp_with_retry(dev)
             if device_arp is None:
                 logger.error("%s: brak wiarygodnego odczytu ARP; odświeżenie anulowane", dev["name"])
@@ -137,6 +186,10 @@ def refresh_all_statuses() -> bool:
                 logger.error("%s: pusta tablica ARP; odświeżenie anulowane", dev["name"])
                 return False
             reports.append((dev, device_arp))
+
+        if active_devices == 0:
+            logger.info("Brak aktywnych urządzeń (tylko type=none) — statusy niezmienione")
+            return True
 
         arp_table: set[str] = set()
         verified_networks = set()
@@ -167,7 +220,7 @@ def refresh_all_statuses() -> bool:
 
         logger.info(
             "Zebrano %s adresów ARP z %s urządzeń; pokrycie potwierdzone dla %s klientów",
-            len(arp_table), len(devices), len(clients)
+            len(arp_table), active_devices, len(clients)
         )
         total, online, offline = database.apply_status_snapshot(arp_table, now)
 

@@ -1,13 +1,34 @@
 [
   {
-    "name": "Router testowy",
+    "name": "Netis (tylko testy)",
+    "type": "none",
+    "host": "192.168.1.1",
+    "networks": [
+      "192.168.1.0/24"
+    ]
+  },
+  {
+    "name": "Router SSH",
+    "type": "ssh",
     "host": "192.0.2.1",
     "port": 22,
     "username": "monitor",
     "password_env": "ROUTER_SSH_PASSWORD",
-    "arp_command": "REPLACE_WITH_ROUTER_ARP_COMMAND",
+    "arp_command": "display arp",
     "networks": [
-      "192.168.1.0/24"
+      "192.168.10.0/24"
+    ]
+  },
+  {
+    "name": "Router Telnet",
+    "type": "telnet",
+    "host": "192.0.2.2",
+    "port": 23,
+    "username": "admin",
+    "password_env": "ROUTER_TELNET_PASSWORD",
+    "arp_command": "show arp",
+    "networks": [
+      "192.168.20.0/24"
     ]
   }
 ]
