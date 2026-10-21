@@ -142,13 +142,7 @@ def delete_client(client_id: str):
         cursor = conn.execute("DELETE FROM clients WHERE client_id = ?", (client_id,))
         if cursor.rowcount == 0:
             return False, "Nie znaleziono klienta"
-        conn.execute(
-            """
-            UPDATE failure_history SET ended_at = ?
-            WHERE client_id = ? AND ended_at IS NULL
-            """,
-            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), client_id)
-        )
+        conn.execute("DELETE FROM failure_history WHERE client_id = ?", (client_id,))
         return True, "Klient usunięty"
 
 def update_client(old_id: str, new_id: str, new_ip: str):

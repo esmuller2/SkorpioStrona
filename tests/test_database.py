@@ -76,7 +76,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(rows[0]["ended_at"])
         self.assertEqual(rows[1]["ended_at"], "2026-10-20 12:00:00")
 
-    def test_failure_start_is_idempotent_and_delete_preserves_history(self):
+    def test_failure_start_is_idempotent_and_delete_removes_history(self):
         database.add_client("A", "192.168.1.10")
         database.log_failure_start("A", "2026-10-20 10:00:00")
         database.log_failure_start("A", "2026-10-20 11:00:00")
@@ -89,9 +89,9 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(database.delete_client("missing"), (False, "Nie znaleziono klienta"))
         with database.get_db() as conn:
             history = conn.execute(
-                "SELECT ended_at FROM failure_history WHERE client_id = 'A'"
-            ).fetchone()
-        self.assertIsNotNone(history["ended_at"])
+                "SELECT COUNT(*) FROM failure_history WHERE client_id = 'A'"
+            ).fetchone()[0]
+        self.assertEqual(history, 0)
 
     def test_missing_client_cannot_be_reported_as_updated(self):
         result = database.update_client("missing", "new", "192.168.1.12")
