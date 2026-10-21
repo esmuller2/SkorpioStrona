@@ -123,7 +123,10 @@ def get_arp_with_retry(dev: dict) -> set[str] | None:
         return set()
 
     if device_type == "local":
-        logger.info(f"{name} (type=local) → odczyt lokalnej tablicy ARP")
+        logger.info(f"{name} (type=local) → ping klientów, potem lokalne ARP")
+        clients = database.get_all_clients()
+        ips = [c["ip"] for c in clients if c.get("ip")]
+        local_arp.ping_ips(ips)
         return local_arp.get_local_arp()
 
     port = dev.get("port", 22 if device_type == "ssh" else 23)
