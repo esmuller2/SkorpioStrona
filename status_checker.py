@@ -83,10 +83,10 @@ def get_local_arp() -> set[str] | None:
         logger.error(f"Błąd lokalnego ARP: {type(e).__name__}: {e}")
         return None
 
-def refresh_all_statuses():
+def refresh_all_statuses() -> bool:
     if not refresh_lock.acquire(blocking=False):
         logger.info("Odświeżanie już trwa — pomijam")
-        return
+        return False
 
     try:
         logger.info("=== Rozpoczynam sprawdzanie statusów ===")
@@ -113,15 +113,15 @@ def refresh_all_statuses():
             local_arp = get_local_arp()
             if local_arp is None or len(local_arp) < 3:
                 logger.error("Słaby lub brak lokalnego ARP — pomijam aktualizację")
-                return
+                return False
             arp_table.update(local_arp)
 
         if not ssh_ok:
-            return
+            return False
 
         if not arp_table:
             logger.error("Brak danych ARP — pomijam aktualizację")
-            return
+            return False
 
         logger.info(f"Łącznie wpisów ARP: {len(arp_table)}")
 
@@ -149,8 +149,10 @@ def refresh_all_statuses():
                     database.update_client_status(client_id, "error", error_time=start_time)
 
         logger.info(f"=== Zakończono sprawdzanie {len(clients)} klientów ===")
+        return True
 
     except Exception as e:
         logger.error(f"Błąd odświeżania: {type(e).__name__}: {e}")
+        return False
     finally:
         refresh_lock.release()

@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
 import shutil
@@ -7,10 +8,18 @@ import os
 DB_PATH = Path(__file__).resolve().parent / "clients.sqlite3"
 BACKUP_DIR = Path(__file__).resolve().parent / "backups"
 
+@contextmanager
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def init_db():
     with get_db() as conn:
@@ -152,8 +161,12 @@ def log_failure_end(client_id: str):
     with get_db() as conn:
         conn.execute(
             """UPDATE failure_history SET ended_at = ?
-               WHERE client_id = ? AND ended_at IS NULL
-               ORDER BY started_at DESC LIMIT 1""",
+               WHERE id = (
+                   SELECT id FROM failure_history
+                   WHERE client_id = ? AND ended_at IS NULL
+                   ORDER BY started_at DESC
+                   LIMIT 1
+               )""",
             (ended_at, client_id)
         )
         conn.commit()

@@ -401,7 +401,12 @@ def refresh_status(request: Request, csrf_token: str = Form(...)):
         return RedirectResponse(url="/login", status_code=303)
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
-    status_checker.refresh_all_statuses()
+    refreshed = status_checker.refresh_all_statuses()
+    if not refreshed:
+        return RedirectResponse(
+            url="/?error=Nie udało się odświeżyć statusów. Sprawdź logi serwera.",
+            status_code=303
+        )
     return RedirectResponse(url="/?msg=Statusy zostały odświeżone", status_code=303)
 
 @app.post("/backup-now")
