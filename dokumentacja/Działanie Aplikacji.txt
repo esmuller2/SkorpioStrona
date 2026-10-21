@@ -1,0 +1,167 @@
+DZIAŁANIE APLIKACJI
+LAN Clients Monitor
+====================
+
+1. CEL
+------
+Aplikacja służy do ewidencji klientów IPv4 i wykrywania awarii
+na podstawie tablicy ARP.
+
+Użytkownik trzyma listę klientów (ID + adres IP).
+Aplikacja okresowo sprawdza, czy te adresy są widoczne w ARP:
+- są widoczne  -> status "ok"
+- zniknęły     -> status "error" i wpis w historii awarii
+
+
+2. TECHNOLOGIA
+--------------
+- FastAPI        — strony WWW i API
+- SQLite         — baza (clients.sqlite3)
+- Jinja2         — szablony HTML
+- APScheduler    — zadania w tle
+- Paramiko       — połączenia SSH
+- własny klient  — Telnet oraz lokalny ARP/ping
+
+Konfiguracja:
+- .env           — sekret sesji, hash hasła, hasła routerów
+- devices.json   — lista urządzeń i sposób odczytu ARP
+
+
+3. URUCHOMIENIE
+---------------
+Przy starcie aplikacja:
+1. Wczytuje plik .env.
+   Bez APP_SECRET i ADMIN_PASSWORD_HASH nie uruchomi się.
+2. Tworzy tabele w bazie, jeśli ich nie ma.
+3. Uruchamia harmonogram:
+   - od razu i co 30 sekund — odświeżenie statusów
+   - codziennie o 03:00     — kopia zapasowa bazy
+   - codziennie o 03:30     — usunięcie awarii starszych niż 90 dni
+
+Aplikację należy uruchamiać jako jeden proces.
+Wiele workerów spowoduje wielokrotny monitoring i wielokrotne backupy.
+
+Przykład:
+    python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+
+4. LOGOWANIE I BEZPIECZEŃSTWO
+-----------------------------
+- Hasło administratora jest porównywane z hashem bcrypt z pliku .env.
+- Po 5 nieudanych próbach z jednego adresu IP logowanie jest blokowane
+  na 5 minut. Licznik jest trzymany w pamięci procesu.
+- Każdy formularz POST wymaga tokenu CSRF.
+- Sesja jest trzymana w ciasteczku (domyślnie 8 godzin).
+  Czas można zmienić zmienną SESSION_MAX_AGE.
+- Nowa karta przeglądarki wymaga ponownego logowania,
+  nawet jeśli na innej karcie użytkownik jest już zalogowany.
+- Na produkcji należy ustawić HTTPS_ONLY=true.
+
+
+5. URZĄDZENIA (devices.json)
+----------------------------
+Każde urządzenie ma pole "type":
+
+type = ssh
+    Połączenie SSH (Paramiko).
+    Wykonywana jest komenda z pola arp_command.
+    Z odpowiedzi wyciągane są adresy IPv4.
+    Przy błędzie są 3 próby.
+
+type = telnet
+    To samo co SSH, ale przez Telnet.
+    Połączenie jest nieszyfrowane — tylko w zaufanej sieci.
+
+type = local
+    Aplikacja pinguje wszystkich klientów z bazy,
+    a następnie czyta lokalną tablicę ARP komputera
+    (arp -a w Windows, arp -n w Linux).
+    Służy głównie do testów, np. na routerze bez SSH.
+
+type = none
+    Urządzenie jest pomijane.
+    Nie przerywa odświeżania pozostałych.
+
+Hasło routera nie jest zapisywane w JSON.
+W devices.json jest tylko nazwa zmiennej (password_env),
+a sama wartość znajduje się w pliku .env.
+
+
+6. JAK POWSTAJE STATUS
+----------------------
+1. Harmonogram albo przycisk "Odśwież statusy"
+   wywołuje sprawdzenie.
+2. Jeśli poprzednie sprawdzenie jeszcze trwa, nowe jest pomijane.
+3. Z aktywnych urządzeń zbierana jest jedna wspólna lista adresów IP.
+4. Jeśli odczyt SSH/Telnet się nie uda albo tablica ARP jest pusta,
+   całe odświeżenie jest anulowane.
+   Statusy klientów pozostają bez zmian.
+   Dzięki temu chwilowa awaria routera nie oznacza
+   fałszywych awarii wszystkich klientów.
+5. Dla type=local pusta tablica nie anuluje cyklu.
+6. Aplikacja porównuje klientów z zebraną tablicą ARP:
+   - IP jest w ARP  -> status ok, aktualizacja last_seen,
+                       zamknięcie otwartej awarii
+   - IP nie ma w ARP -> status error, otwarcie awarii
+                       (jeśli nie ma już otwartej)
+7. Jeden klient może mieć tylko jedną otwartą awarię.
+
+
+7. BAZA DANYCH
+--------------
+Tabela clients:
+    client_id, ip, status, error_time, ping_ms, last_seen
+
+Tabela failure_history:
+    client_id, started_at, ended_at
+
+Usunięcie klienta usuwa też całą jego historię awarii.
+Taki klient znika również z raportu nocnego.
+
+Kolumna ping_ms istnieje w bazie, ale bieżący monitoring
+jej nie wypełnia.
+
+
+8. STRONY
+---------
+/                  lista klientów, dodawanie, edycja, usuwanie,
+                   filtry OK/awaria, ręczne odświeżenie,
+                   backup, czyszczenie starych awarii
+/history           historia awarii z filtrami i eksportem CSV
+/overnight         awarie przecinające się z godzinami 17:00–09:00
+                   oraz eksport CSV
+/login, /logout    logowanie i wylogowanie
+/api/clients       dane do odświeżania tabeli w przeglądarce
+/health            prosty health-check
+
+Motyw jasny/ciemny jest zapamiętywany w przeglądarce
+i działa także na stronie logowania.
+
+
+9. KOPIE ZAPASOWE
+-----------------
+Codziennie o 03:00 tworzona jest kopia clients.sqlite3
+w katalogu backups/.
+Przechowywanych jest maksymalnie 14 najnowszych kopii.
+Kopia może być też zrobiona ręcznie przyciskiem "Backup teraz".
+
+
+10. CZEGO APLIKACJA NIE ROBI
+----------------------------
+- Nie pinguje całej podsieci, tylko klientów zapisanych w bazie
+  (przy type=local).
+- Nie wysyła powiadomień e-mail ani Telegram.
+- Nie gwarantuje wykrycia urządzenia, które jest włączone,
+  ale nie pojawia się w tablicy ARP.
+- Przy bardzo dużej liczbie klientów (1000+) odczyt type=local
+  (ping każdego klienta) staje się niepraktyczny.
+  Docelowy odczyt z routerów Huawei/DASAN po SSH skaluje się dobrze,
+  bo to jeden odczyt tablicy ARP, a nie tysiąc pingów.
+
+
+11. KRÓTKO
+----------
+Aplikacja trzyma listę adresów IP klientów.
+Co 30 sekund sprawdza tablicę ARP (z routera albo lokalnie).
+Zniknięcie adresu otwiera awarię.
+Pojawienie się adresu zamyka awarię i przywraca status ok.
