@@ -5,12 +5,16 @@
     <title>Historia awarii</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/index.css">
+    <link rel="stylesheet" href="/static/history.css">
+    <script src="/static/theme.js"></script>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>Historia awarii</h1>
             <div class="header-right">
+                <button class="theme-toggle" id="themeToggle" title="Tryb ciemny">🌙</button>
+                <span class="clock" id="clock">--:--:--</span>
                 <a href="/" class="logout">← Lista klientów</a>
                 <form method="post" action="/logout" style="display:inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -23,7 +27,7 @@
         {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
 
         <div class="controls">
-            <form method="get" action="/history" style="display:inline;">
+            <form method="get" action="/history" class="search-form">
                 <input type="text" name="client_id" placeholder="ID klienta" value="{{ client_id|e }}">
                 <label>Od: <input type="date" name="date_from" value="{{ date_from }}"></label>
                 <label>Do: <input type="date" name="date_to" value="{{ date_to }}"></label>
@@ -31,6 +35,7 @@
                 <button type="submit">Filtruj</button>
                 <a href="/history" class="btn btn-secondary">Wyczyść filtry</a>
             </form>
+            <a href="/export/history?client_id={{ client_id|urlencode }}&date_from={{ date_from|urlencode }}&date_to={{ date_to|urlencode }}{% if only_open %}&only_open=1{% endif %}" class="btn btn-success">Eksport CSV</a>
             <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Tej operacji nie można cofnąć.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="next" value="/history">
@@ -38,9 +43,7 @@
             </form>
         </div>
 
-        <p style="color:var(--muted); font-size:14px;">
-            Łącznie: {{ history|length }}
-        </p>
+        <p class="info">Łącznie: {{ history|length }}</p>
 
         <table>
             <tr>
@@ -61,5 +64,16 @@
             {% endfor %}
         </table>
     </div>
+    <script>
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').textContent =
+                String(now.getHours()).padStart(2,'0') + ':' +
+                String(now.getMinutes()).padStart(2,'0') + ':' +
+                String(now.getSeconds()).padStart(2,'0');
+        }
+        updateClock();
+        setInterval(updateClock, 1000);
+    </script>
 </body>
 </html>

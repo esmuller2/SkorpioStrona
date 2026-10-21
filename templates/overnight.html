@@ -5,12 +5,16 @@
     <title>Raport nocny (17:00–09:00)</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/index.css">
+    <link rel="stylesheet" href="/static/history.css">
+    <script src="/static/theme.js"></script>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>Raport nocny (17:00–09:00)</h1>
             <div class="header-right">
+                <button class="theme-toggle" id="themeToggle" title="Tryb ciemny">🌙</button>
+                <span class="clock" id="clock">--:--:--</span>
                 <a href="/" class="logout">← Lista klientów</a>
                 <form method="post" action="/logout" style="display:inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -23,12 +27,13 @@
         {% if error %}<div class="msg-error">{{ error }}</div>{% endif %}
 
         <div class="controls">
-            <form method="get" action="/overnight" style="display:inline;">
+            <form method="get" action="/overnight" class="search-form">
                 <label>Od: <input type="date" name="date_from" value="{{ date_from }}"></label>
                 <label>Do: <input type="date" name="date_to" value="{{ date_to }}"></label>
                 <button type="submit">Filtruj</button>
                 <a href="/overnight" class="btn btn-secondary">Wyczyść</a>
             </form>
+            <a href="/export/overnight?date_from={{ date_from|urlencode }}&date_to={{ date_to|urlencode }}" class="btn btn-success">Eksport CSV</a>
             <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Raport nocny też zostanie wyczyszczony.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="next" value="/overnight">
@@ -36,7 +41,7 @@
             </form>
         </div>
 
-        <p style="color:var(--muted); font-size:14px;">
+        <p class="info">
             Awarie, które przecinają się z godzinami 17:00–09:00.
             Łącznie: {{ history|length }}
         </p>
@@ -60,5 +65,16 @@
             {% endfor %}
         </table>
     </div>
+    <script>
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').textContent =
+                String(now.getHours()).padStart(2,'0') + ':' +
+                String(now.getMinutes()).padStart(2,'0') + ':' +
+                String(now.getSeconds()).padStart(2,'0');
+        }
+        updateClock();
+        setInterval(updateClock, 1000);
+    </script>
 </body>
 </html>

@@ -153,8 +153,8 @@ def safe_csv_value(value):
     return value
 
 @app.get("/login")
-def login_page(request: Request):
-    if get_current_user(request):
+def login_page(request: Request, reauth: str = None):
+    if get_current_user(request) and reauth != "1":
         return RedirectResponse(url="/", status_code=303)
     csrf_token = generate_csrf_token(request)
     return templates.TemplateResponse(
@@ -210,7 +210,7 @@ def login(
             request.session["user"] = "admin"
             with login_attempts_lock:
                 login_attempts.pop(client_ip, None)
-            return RedirectResponse(url="/", status_code=303)
+            return RedirectResponse(url="/?tabauth=1", status_code=303)
     except ValueError:
         logger.error("Nieprawidłowy format hasha hasła lub hasło przekracza limit bcrypt")
 
@@ -340,28 +340,71 @@ def overnight_page(
         },
     )
 
-@app.get("/export")
-def export_csv(request: Request):
+@app.get("/export/history")
+def export_history_csv(
+    request: Request,
+    client_id: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    only_open: bool = False,
+):
     if not get_current_user(request):
         return RedirectResponse(url="/login", status_code=303)
 
-    clients = database.get_all_clients()
+    date_from, date_to = parse_date_range(date_from, date_to)
+    history = database.get_failure_history_filtered(
+        client_id=client_id,
+        date_from=date_from,
+        date_to=date_to,
+        only_open=only_open,
+        limit=5000,
+    )
+
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ID Klienta", "Adres IP", "Status", "Czas awarii", "Ping (ms)"])
-    for c in clients:
+    writer.writerow(["ID Klienta", "Start", "Koniec", "Czas trwania"])
+    for item in history:
         writer.writerow([
-            safe_csv_value(c["client_id"]),
-            safe_csv_value(c["ip"]),
-            safe_csv_value(c["status"]),
-            safe_csv_value(c.get("error_time") or ""),
-            c.get("ping_ms") if c.get("ping_ms") is not None else ""
+            safe_csv_value(item.get("client_id") or ""),
+            safe_csv_value(item.get("started_at") or ""),
+            safe_csv_value(item.get("ended_at") or "trwa"),
+            safe_csv_value(item.get("duration") or ""),
         ])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=klienci.csv"}
+        headers={"Content-Disposition": "attachment; filename=historia_awarii.csv"},
+    )
+
+
+@app.get("/export/overnight")
+def export_overnight_csv(
+    request: Request,
+    date_from: str = None,
+    date_to: str = None,
+):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+
+    date_from, date_to = parse_date_range(date_from, date_to)
+    history = database.get_overnight_failures(date_from=date_from, date_to=date_to)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID Klienta", "Start", "Koniec", "Czas trwania"])
+    for item in history:
+        writer.writerow([
+            safe_csv_value(item.get("client_id") or ""),
+            safe_csv_value(item.get("started_at") or ""),
+            safe_csv_value(item.get("ended_at") or "trwa"),
+            safe_csv_value(item.get("duration") or ""),
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=raport_nocny.csv"},
     )
 
 @app.post("/add")

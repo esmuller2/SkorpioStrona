@@ -1,8 +1,9 @@
 body { padding: 32px 24px; }
-.container { max-width: 1100px; margin: 0 auto; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.header h1 { margin: 0; font-size: 26px; font-weight: 600; }
-.filters {
+.container { max-width: 1200px; margin: 0 auto; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
+.header h1 { margin: 0; font-size: 28px; font-weight: 600; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.filters, .controls {
     background: var(--card);
     padding: 16px;
     border-radius: var(--radius);
@@ -13,15 +14,15 @@ body { padding: 32px 24px; }
     flex-wrap: wrap;
     align-items: center;
 }
-.filters input, .filters button {
+.filters input, .filters button, .controls input, .controls button {
     padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--card);
     color: var(--text);
 }
-.filters button { background: var(--accent); color: white; border: none; }
-.filters label { font-size: 14px; color: var(--muted); }
+.filters button, .controls button { background: var(--accent); color: white; border: none; }
+.filters label, .controls label { font-size: 14px; color: var(--muted); }
 table {
     width: 100%;
     border-collapse: collapse;
@@ -31,8 +32,10 @@ table {
     box-shadow: var(--shadow);
 }
 th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
-th { background: var(--bg); font-weight: 600; font-size: 13px; color: var(--muted); }
+th { background: var(--bg); font-weight: 600; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 tr:last-child td { border-bottom: none; }
+tr:hover { background: rgba(0,0,0,0.03); }
+[data-theme="dark"] tr:hover { background: rgba(255,255,255,0.04); }
 .open { color: var(--danger); font-weight: 500; }
 .closed { color: var(--success); }
 .info { color: var(--muted); font-size: 14px; margin-bottom: 12px; }

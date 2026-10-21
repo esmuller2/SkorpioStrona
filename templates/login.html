@@ -5,6 +5,12 @@
     <title>Logowanie</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/login.css">
+    <script>
+        (function () {
+            const saved = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', saved);
+        })();
+    </script>
 </head>
 <body>
     <div class="card">
