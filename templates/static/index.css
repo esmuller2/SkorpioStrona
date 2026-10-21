@@ -69,7 +69,30 @@ body { padding: 28px 20px 48px; }
     align-items: center;
 }
 
-.search-form input { width: 160px; }
+.search-form input[type="text"] { width: 150px; }
+
+.filter-label,
+.check-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.check-label {
+    gap: 6px;
+    padding: 0 2px;
+}
+
+.check-label input[type="checkbox"] {
+    margin: 0;
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+}
 
 .add-form {
     background: var(--card);

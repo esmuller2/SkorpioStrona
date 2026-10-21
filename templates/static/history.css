@@ -6,6 +6,11 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 12px 14px;
+    align-items: center;
+}
+
+.controls .search-form {
+    flex: 0 1 auto;
 }
 
 .controls input[type="date"] { width: auto; }
