@@ -21,7 +21,16 @@ python -m pip install -r requirements.txt
 Copy-Item devices.example.json devices.json
 ```
 
-Utwórz `.env` z losowym `APP_SECRET`, hashem bcrypt w `ADMIN_PASSWORD_HASH` oraz zmiennymi haseł wskazanymi przez `password_env`. Nie zapisuj haseł w JSON ani w repozytorium. Uzupełnij `devices.json` prawdziwymi danymi. Pole `type` może być `ssh`, `telnet` lub `none`.
+Utwórz `.env` z losowym `APP_SECRET`, hashem bcrypt w `ADMIN_PASSWORD_HASH` oraz `USER_PASSWORD_HASH`. Konta:
+
+- `admin` — pełny dostęp (dodawanie, edycja, usuwanie, backup, czyszczenie)
+- `uzytkownik` — tylko podgląd listy, historii i raportu nocnego
+
+Hash użytkownika generujesz tak:
+
+```powershell
+python -c "import bcrypt; print(bcrypt.hashpw(b'TWOJE_HASLO', bcrypt.gensalt()).decode())"
+```
 
 Uruchom pojedynczy proces:
 

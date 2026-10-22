@@ -39,11 +39,13 @@
                 <a href="/history" class="btn btn-secondary">Wyczyść filtry</a>
             </form>
             <a href="/export/history?client_id={{ client_id|urlencode }}&date_from={{ date_from|urlencode }}&date_to={{ date_to|urlencode }}{% if only_open %}&only_open=1{% endif %}" class="btn btn-success">Eksport CSV</a>
+            {% if role == "admin" %}
             <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Tej operacji nie można cofnąć.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="next" value="/history">
                 <button type="submit" class="btn-danger">Wyczyść historię</button>
             </form>
+            {% endif %}
         </div>
 
         <p class="info">Łącznie: {{ history|length }}</p>

@@ -29,12 +29,23 @@ BASE_DIR = Path(__file__).resolve().parent
 
 SECRET_KEY = os.getenv("APP_SECRET")
 PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH")
+USER_PASSWORD_HASH = os.getenv("USER_PASSWORD_HASH")
 
 if not SECRET_KEY or not PASSWORD_HASH:
     raise RuntimeError(
         "Brak wymaganych zmiennych środowiskowych: APP_SECRET i ADMIN_PASSWORD_HASH. "
         "Ustaw je w pliku .env"
     )
+
+ACCOUNTS = {
+    "admin": {"hash": PASSWORD_HASH, "role": "admin", "label": "admin"},
+}
+if USER_PASSWORD_HASH:
+    ACCOUNTS["uzytkownik"] = {
+        "hash": USER_PASSWORD_HASH,
+        "role": "user",
+        "label": "użytkownik",
+    }
 
 login_attempts = defaultdict(list)
 login_attempts_lock = Lock()
@@ -136,6 +147,21 @@ database.init_db()
 def get_current_user(request: Request):
     return request.session.get("user")
 
+def get_current_role(request: Request) -> str:
+    return request.session.get("role") or ""
+
+def require_login(request: Request):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    return None
+
+def require_admin(request: Request):
+    if not get_current_user(request):
+        return RedirectResponse(url="/login", status_code=303)
+    if get_current_role(request) != "admin":
+        return RedirectResponse(url="/?error=Brak uprawnień", status_code=303)
+    return None
+
 def parse_date_range(date_from: str | None, date_to: str | None) -> tuple[str | None, str | None]:
     parsed = []
     for value in (date_from, date_to):
@@ -172,6 +198,7 @@ def login_page(request: Request, reauth: str = None):
 @app.post("/login")
 def login(
     request: Request,
+    username: str | None = Form(None),
     password: str | None = Form(None),
     csrf_token: str | None = Form(None)
 ):
@@ -197,23 +224,26 @@ def login(
             }
         )
 
-    if not password or len(password) > 128:
+    account_name = (username or "").strip().lower()
+    account = ACCOUNTS.get(account_name)
+    if not password or len(password) > 128 or not account:
         record_login_failure(client_ip)
         return templates.TemplateResponse(
             request=request,
             name="login.html",
             context={
-                "error": "Nieprawidłowe hasło",
+                "error": "Nieprawidłowy login lub hasło",
                 "csrf_token": generate_csrf_token(request)
             }
         )
 
     try:
         password_bytes = password.encode("utf-8")
-        hash_bytes = PASSWORD_HASH.strip().strip('"').strip("'").encode("utf-8")
+        hash_bytes = account["hash"].strip().strip('"').strip("'").encode("utf-8")
         if bcrypt.checkpw(password_bytes, hash_bytes):
             request.session.clear()
-            request.session["user"] = "admin"
+            request.session["user"] = account_name
+            request.session["role"] = account["role"]
             with login_attempts_lock:
                 login_attempts.pop(client_ip, None)
             return RedirectResponse(url="/?tabauth=1", status_code=303)
@@ -225,7 +255,7 @@ def login(
         request=request,
         name="login.html",
         context={
-            "error": "Nieprawidłowe hasło",
+            "error": "Nieprawidłowy login lub hasło",
             "csrf_token": generate_csrf_token(request)
         }
     )
@@ -249,8 +279,9 @@ def home(
     search: str = None,
     status_filter: str = None,
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_login(request)
+    if denied:
+        return denied
 
     per_page = 100
     _, total = database.get_clients_paginated(search, 1, 1, status_filter)
@@ -274,6 +305,8 @@ def home(
             "search": search or "",
             "status_filter": status_filter or "",
             "csrf_token": generate_csrf_token(request),
+            "role": get_current_role(request),
+            "username": get_current_user(request),
         },
     )
 
@@ -287,8 +320,9 @@ def history_page(
     msg: str = None,
     error: str = None,
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_login(request)
+    if denied:
+        return denied
 
     date_from, date_to = parse_date_range(date_from, date_to)
 
@@ -312,6 +346,8 @@ def history_page(
             "msg": msg,
             "error": error,
             "csrf_token": generate_csrf_token(request),
+            "role": get_current_role(request),
+            "username": get_current_user(request),
         },
     )
 
@@ -323,8 +359,9 @@ def overnight_page(
     msg: str = None,
     error: str = None,
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_login(request)
+    if denied:
+        return denied
 
     date_from, date_to = parse_date_range(date_from, date_to)
 
@@ -343,6 +380,8 @@ def overnight_page(
             "msg": msg,
             "error": error,
             "csrf_token": generate_csrf_token(request),
+            "role": get_current_role(request),
+            "username": get_current_user(request),
         },
     )
 
@@ -354,8 +393,9 @@ def export_history_csv(
     date_to: str = None,
     only_open: bool = False,
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_login(request)
+    if denied:
+        return denied
 
     date_from, date_to = parse_date_range(date_from, date_to)
     history = database.get_failure_history_filtered(
@@ -390,8 +430,9 @@ def export_overnight_csv(
     date_from: str = None,
     date_to: str = None,
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_login(request)
+    if denied:
+        return denied
 
     date_from, date_to = parse_date_range(date_from, date_to)
     history = database.get_overnight_failures(date_from=date_from, date_to=date_to)
@@ -420,8 +461,9 @@ def add_client(
     ip: str = Form(...),
     csrf_token: str | None = Form(None)
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_admin(request)
+    if denied:
+        return denied
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
 
@@ -446,8 +488,9 @@ def delete_client(
     client_id: str = Form(...),
     csrf_token: str | None = Form(None)
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_admin(request)
+    if denied:
+        return denied
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
     success, message = database.delete_client(client_id)
@@ -461,8 +504,9 @@ def edit_client(
     new_ip: str = Form(...),
     csrf_token: str | None = Form(None)
 ):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_admin(request)
+    if denied:
+        return denied
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(url="/?error=Nieprawidłowy token bezpieczeństwa", status_code=303)
 
@@ -483,8 +527,9 @@ def edit_client(
 
 @app.post("/refresh-status")
 def refresh_status(request: Request, csrf_token: str | None = Form(None)):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_admin(request)
+    if denied:
+        return denied
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(
             url=f"/?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
@@ -500,8 +545,9 @@ def refresh_status(request: Request, csrf_token: str | None = Form(None)):
 
 @app.post("/backup-now")
 def backup_now(request: Request, csrf_token: str | None = Form(None)):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_admin(request)
+    if denied:
+        return denied
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(
             url=f"/?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
@@ -512,8 +558,9 @@ def backup_now(request: Request, csrf_token: str | None = Form(None)):
 
 @app.post("/cleanup-now")
 def cleanup_now(request: Request, csrf_token: str | None = Form(None)):
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_admin(request)
+    if denied:
+        return denied
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(
             url=f"/?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",
@@ -529,8 +576,9 @@ def clear_history(
     next: str = Form("/history")
 ):
     next_path = next if next in {"/history", "/overnight"} else "/history"
-    if not get_current_user(request):
-        return RedirectResponse(url="/login", status_code=303)
+    denied = require_admin(request)
+    if denied:
+        return denied
     if not validate_csrf(request, csrf_token):
         return RedirectResponse(
             url=f"{next_path}?{urlencode({'error': 'Nieprawidłowy token bezpieczeństwa'})}",

@@ -34,11 +34,13 @@
                 <a href="/overnight" class="btn btn-secondary">Wyczyść</a>
             </form>
             <a href="/export/overnight?date_from={{ date_from|urlencode }}&date_to={{ date_to|urlencode }}" class="btn btn-success">Eksport CSV</a>
+            {% if role == "admin" %}
             <form method="post" action="/clear-history" style="display:inline;" onsubmit="return confirm('Na pewno usunąć całą historię awarii? Raport nocny też zostanie wyczyszczony.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="next" value="/overnight">
                 <button type="submit" class="btn-danger">Wyczyść historię</button>
             </form>
+            {% endif %}
         </div>
 
         <p class="info">

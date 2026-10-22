@@ -20,7 +20,8 @@
         {% endif %}
         <form method="post" action="/login">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="password" name="password" placeholder="Hasło" required autofocus maxlength="128">
+            <input type="text" name="username" placeholder="Login" required autofocus maxlength="50" autocomplete="username">
+            <input type="password" name="password" placeholder="Hasło" required maxlength="128" autocomplete="current-password">
             <button type="submit">Zaloguj</button>
         </form>
     </div>

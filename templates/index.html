@@ -14,6 +14,7 @@
             <div class="header-right">
                 <button class="theme-toggle" id="themeToggle" title="Tryb ciemny" aria-label="Przełącz motyw"></button>
                 <span class="clock" id="clock">--:--:--</span>
+                <span class="logout">{{ username|e }}</span>
                 <form method="post" action="/logout" style="display:inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="logout-button">Wyloguj</button>
@@ -28,6 +29,7 @@
 
         <div class="controls">
             <button onclick="location.reload()">Odśwież</button>
+            {% if role == "admin" %}
             <form method="post" action="/refresh-status" style="display:inline;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit">Odśwież statusy</button>
@@ -40,6 +42,7 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit" class="btn-danger">Wyczyść stare awarie</button>
             </form>
+            {% endif %}
 
             <form method="get" action="/" class="search-form" style="display:inline;">
                 <input type="text" name="search" placeholder="Szukaj ID..." value="{{ search|e }}">
@@ -52,12 +55,14 @@
             <a href="/{% if search %}?search={{ search|urlencode }}{% endif %}" class="btn btn-secondary">Wszystkie</a>
         </div>
 
+        {% if role == "admin" %}
         <form class="add-form" method="post" action="/add">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="text" name="client_id" placeholder="ID Klienta" required maxlength="50">
             <input type="text" name="ip" placeholder="Adres IP" required>
             <button type="submit">Dodaj</button>
         </form>
+        {% endif %}
 
         <p id="summary" style="color:var(--muted); font-size:14px; margin-bottom:12px;">
             {{ clients|length }} z {{ total }}
@@ -73,7 +78,7 @@
                 <th>ID</th>
                 <th>IP</th>
                 <th>Status</th>
-                <th>Akcje</th>
+                {% if role == "admin" %}<th>Akcje</th>{% endif %}
             </tr>
             {% for client in clients %}
             <tr data-id="{{ client.client_id|e }}">
@@ -91,6 +96,7 @@
                         {% endif %}
                     {% endif %}
                 </td>
+                {% if role == "admin" %}
                 <td>
                     <form method="post" action="/edit" style="display:inline;">
                         <input type="hidden" name="old_client_id" value="{{ client.client_id|e }}">
@@ -100,11 +106,12 @@
                         <button type="submit" class="btn-warning">Zapisz</button>
                     </form>
                     <form method="post" action="/delete" style="display:inline; margin-left:6px;">
-    <input type="hidden" name="client_id" value="{{ client.client_id|e }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit" class="btn-danger" onclick="return confirm('Usunąć?')">Usuń</button>
-</form>
+                        <input type="hidden" name="client_id" value="{{ client.client_id|e }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn-danger" onclick="return confirm('Usunąć?')">Usuń</button>
+                    </form>
                 </td>
+                {% endif %}
             </tr>
             {% else %}
             <tr><td colspan="5" style="text-align:center; color:var(--muted);">Brak klientów</td></tr>
