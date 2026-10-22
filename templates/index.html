@@ -64,12 +64,18 @@
         </form>
         {% endif %}
 
-        <p id="summary" style="color:var(--muted); font-size:14px; margin-bottom:12px;">
+        <p id="summary" class="info">
             {{ clients|length }} z {{ total }}
             {% if search %} · „{{ search|e }}”{% endif %}
             {% if status_filter %} · {{ status_filter|e }}{% endif %}
             · <a href="/history">Historia awarii</a>
             · <a href="/overnight">Raport nocny</a>
+        </p>
+        <p id="last-refresh" class="info refresh-{{ 'ok' if last_refresh.ok else 'bad' if last_refresh.ok is sameas false else 'unknown' }}">
+            Ostatnie odświeżenie:
+            {% if last_refresh.at %}{{ last_refresh.at }}{% else %}jeszcze nie było{% endif %}
+            · {{ last_refresh.message }}
+            {% if last_refresh.online is not none %} · online {{ last_refresh.online }}, awaria {{ last_refresh.offline }}{% endif %}
         </p>
 
         <table id="clients-table">
@@ -285,6 +291,20 @@
                 });
 
                 updateDurations();
+
+                const refresh = data.last_refresh;
+                const box = document.getElementById('last-refresh');
+                if (refresh && box) {
+                    const when = refresh.at || 'jeszcze nie było';
+                    const counts = refresh.online !== null && refresh.online !== undefined
+                        ? ` · online ${refresh.online}, awaria ${refresh.offline}`
+                        : '';
+                    box.textContent = `Ostatnie odświeżenie: ${when} · ${refresh.message || ''}${counts}`;
+                    box.className = 'info ' + (
+                        refresh.ok === true ? 'refresh-ok' :
+                        refresh.ok === false ? 'refresh-bad' : 'refresh-unknown'
+                    );
+                }
             } catch (e) {
                 console.error('Błąd odświeżania:', e);
             }

@@ -237,6 +237,10 @@ tr:hover td { background: rgba(0, 0, 0, 0.02); }
     margin: 8px 0 14px;
 }
 
+.refresh-ok { color: var(--success); }
+.refresh-bad { color: var(--danger); }
+.refresh-unknown { color: var(--muted); }
+
 @media (max-width: 720px) {
     .header { flex-direction: column; align-items: flex-start; }
     .header-right { width: 100%; justify-content: flex-start; }

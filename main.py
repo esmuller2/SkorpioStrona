@@ -307,6 +307,7 @@ def home(
             "csrf_token": generate_csrf_token(request),
             "role": get_current_role(request),
             "username": get_current_user(request),
+            "last_refresh": status_checker.get_last_refresh(),
         },
     )
 
@@ -614,6 +615,7 @@ def api_clients(
         "page": page,
         "total_pages": total_pages,
         "total": total,
+        "last_refresh": status_checker.get_last_refresh(),
     }
 
 @app.get("/health")

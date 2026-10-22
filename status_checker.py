@@ -15,6 +15,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 refresh_lock = threading.Lock()
+last_refresh = {
+    "at": None,
+    "ok": None,
+    "message": "Brak odświeżenia od startu",
+    "online": None,
+    "offline": None,
+}
+
+def get_last_refresh() -> dict:
+    return dict(last_refresh)
+
+def _set_last_refresh(ok: bool, message: str, online: int | None = None, offline: int | None = None) -> None:
+    last_refresh["at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    last_refresh["ok"] = ok
+    last_refresh["message"] = message
+    last_refresh["online"] = online
+    last_refresh["offline"] = offline
 
 DEVICES_PATH = Path(__file__).resolve().parent / "devices.json"
 
@@ -201,15 +218,21 @@ def refresh_all_statuses() -> bool:
             active_devices += 1
             device_arp = get_arp_with_retry(dev)
             if device_arp is None:
-                logger.error("%s: brak wiarygodnego odczytu ARP; odświeżenie anulowane", dev["name"])
+                msg = f"{dev['name']}: brak wiarygodnego odczytu ARP"
+                logger.error("%s; odświeżenie anulowane", msg)
+                _set_last_refresh(False, msg)
                 return False
             if not device_arp and dev.get("type") != "local":
-                logger.error("%s: pusta tablica ARP; odświeżenie anulowane", dev["name"])
+                msg = f"{dev['name']}: pusta tablica ARP"
+                logger.error("%s; odświeżenie anulowane", msg)
+                _set_last_refresh(False, msg)
                 return False
             reports.append((dev, device_arp or set()))
 
         if active_devices == 0:
-            logger.info("Brak aktywnych urządzeń (tylko type=none) — statusy niezmienione")
+            msg = "Brak aktywnych urządzeń (tylko type=none)"
+            logger.info("%s — statusy niezmienione", msg)
+            _set_last_refresh(True, msg)
             return True
 
         arp_table: set[str] = set()
@@ -217,7 +240,9 @@ def refresh_all_statuses() -> bool:
             arp_table.update(device_arp)
 
         if not arp_table and not any(dev.get("type") == "local" for dev, _ in reports):
-            logger.error("Brak danych ARP; odświeżenie anulowane")
+            msg = "Brak danych ARP"
+            logger.error("%s; odświeżenie anulowane", msg)
+            _set_last_refresh(False, msg)
             return False
 
         logger.info(
@@ -225,18 +250,18 @@ def refresh_all_statuses() -> bool:
             len(arp_table), active_devices
         )
         total, online, offline = database.apply_status_snapshot(arp_table, now)
-
-        logger.info(
-            "=== Odświeżono %s klientów: online=%s, awaria=%s ===",
-            total, online, offline
-        )
+        msg = f"Odświeżono {total} klientów"
+        logger.info("=== %s: online=%s, awaria=%s ===", msg, online, offline)
+        _set_last_refresh(True, msg, online, offline)
         return True
 
     except DeviceConfigurationError as e:
         logger.error("Błędna konfiguracja monitoringu: %s", e)
+        _set_last_refresh(False, f"Błędna konfiguracja: {e}")
         return False
     except Exception as e:
         logger.error(f"Błąd odświeżania: {type(e).__name__}: {e}")
+        _set_last_refresh(False, f"Błąd: {type(e).__name__}")
         return False
     finally:
         refresh_lock.release()
