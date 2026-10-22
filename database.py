@@ -121,7 +121,7 @@ def get_clients_paginated(search: str = None, page: int = 1, per_page: int = 100
         total_pages = max(1, (total + per_page - 1) // per_page)
         page = min(page, total_pages)
 
-        query += " ORDER BY client_id LIMIT ? OFFSET ?"
+        query += " ORDER BY CASE WHEN status = 'error' THEN 0 ELSE 1 END, client_id LIMIT ? OFFSET ?"
         offset = (page - 1) * per_page
         rows = conn.execute(query, params + [per_page, offset]).fetchall()
         return [dict(row) for row in rows], total

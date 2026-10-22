@@ -268,6 +268,15 @@
                     }
                 });
 
+                const table = document.getElementById('clients-table');
+                data.clients.forEach((client, index) => {
+                    const row = findRowByClientId(client.client_id);
+                    if (!row) return;
+                    table.appendChild(row);
+                    const lp = row.querySelector('td');
+                    if (lp) lp.textContent = String((Number(page) - 1) * 100 + index + 1);
+                });
+
                 updateDurations();
             } catch (e) {
                 console.error('Błąd odświeżania:', e);
