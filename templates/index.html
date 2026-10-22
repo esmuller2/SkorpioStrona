@@ -12,7 +12,7 @@
         <div class="header">
             <h1>Lista klientów</h1>
             <div class="header-right">
-                <button class="theme-toggle" id="themeToggle" title="Tryb ciemny">🌙</button>
+                <button class="theme-toggle" id="themeToggle" title="Tryb ciemny" aria-label="Przełącz motyw"></button>
                 <span class="clock" id="clock">--:--:--</span>
                 <form method="post" action="/logout" style="display:inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
