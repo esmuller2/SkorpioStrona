@@ -1,0 +1,122 @@
+PLAN TESTÓW
+LAN Clients Monitor
+====================
+
+1. CEL
+------
+Plan opisuje, co i w jakiej kolejności sprawdzić przed oddaniem
+aplikacji do użytku. Celem jest potwierdzenie, że:
+
+- logowanie i uprawnienia działają poprawnie,
+- monitoring statusów nie oznacza fałszywych awarii,
+- historia awarii i raport nocny są spójne z listą klientów,
+- interfejs jest używalny dla konta admin i użytkownik.
+
+
+2. ZAKRES
+---------
+W zakresie:
+- logowanie, sesja, CSRF, blokada po błędnych próbach
+- konta admin i uzytkownik
+- dodawanie, edycja i usuwanie klientów
+- odświeżanie statusów (ssh, telnet, local, none)
+- historia awarii i raport nocny
+- eksport CSV
+- backup i czyszczenie starych awarii
+- motyw, sortowanie awarii, informacja o ostatnim odświeżeniu
+
+Poza zakresem:
+- testy wydajności przy 1000+ klientach na prawdziwym pingu
+- powiadomienia e-mail / Telegram
+- testy penetracyjne poza podstawową kontrolą dostępu
+
+
+3. ŚRODOWISKO
+-------------
+- Windows, Python 3.10 lub nowszy
+- aplikacja uruchomiona lokalnie:
+  python -m uvicorn main:app --host 127.0.0.1 --port 8000
+- plik .env z APP_SECRET, ADMIN_PASSWORD_HASH i USER_PASSWORD_HASH
+- devices.json z co najmniej jednym urządzeniem testowym
+- przeglądarka z włączonym JavaScript
+- osobna baza testowa albo kopia clients.sqlite3
+
+
+4. ROLE
+-------
+- Tester: wykonuje przypadki i zapisuje wynik.
+- Admin: konto z pełnym dostępem.
+- Użytkownik: konto tylko do podglądu.
+
+
+5. KOLEJNOŚĆ
+------------
+1. Start aplikacji i logowanie.
+2. Uprawnienia admin / użytkownik.
+3. Operacje na klientach.
+4. Monitoring i statusy.
+5. Historia awarii i raport nocny.
+6. Eksport, backup, czyszczenie.
+7. Interfejs (motyw, sortowanie, ostatnie odświeżenie).
+8. Przypadki negatywne (złe hasło, brak CSRF, zły devices.json).
+
+
+6. KRYTERIA ZALICZENIA
+----------------------
+Test jest zaliczony, gdy:
+- wynik jest zgodny z oczekiwanym w przypadku testowym,
+- nie pojawia się nieobsłużony wyjątek w przeglądarce ani w logu,
+- dane w bazie zgadzają się z tym, co widać na stronie.
+
+Wydanie można uznać za gotowe, gdy:
+- wszystkie przypadki krytyczne są zaliczone,
+- przypadki wysokie nie mają otwartych błędów blokujących pracę,
+- znane ograniczenia (np. local przy bardzo dużej liczbie klientów)
+  są opisane i zaakceptowane.
+
+
+7. PRIORYTETY
+-------------
+Krytyczny:
+- logowanie i blokada
+- rozdział admin / użytkownik
+- poprawne otwieranie i zamykanie awarii
+- anulowanie odświeżenia przy błędzie odczytu SSH/Telnet
+- usunięcie klienta kasuje historię
+
+Wysoki:
+- raport nocny
+- eksport CSV
+- backup
+- sortowanie awarii na górze
+- informacja o ostatnim odświeżeniu
+
+Średni:
+- motyw na wszystkich stronach
+- filtry historii
+- czyszczenie starych awarii
+
+
+8. DANE TESTOWE
+---------------
+Minimalny zestaw klientów:
+- T-001  192.168.1.100   oczekiwany online
+- T-002  192.168.1.101   oczekiwany online
+- T-003  192.168.1.103   oczekiwany offline
+- T-005  192.168.1.102   oczekiwany offline
+
+Urządzenia:
+- jedno type=local (test bez SSH)
+- opcjonalnie jedno type=ssh i jedno type=none
+
+
+9. RAPORTOWANIE
+---------------
+Dla każdego przypadku zapisać:
+- ID przypadku
+- data i godzina
+- wynik: zaliczony / niezaliczony / zablokowany
+- krótki opis odchylenia, jeśli niezaliczony
+- zrzut ekranu lub fragment logu, jeśli błąd
+
+Plik z przypadkami: dokumentacja/Przypadki testowe.txt

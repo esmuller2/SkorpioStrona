@@ -1,0 +1,293 @@
+PRZYPADKI TESTOWE
+LAN Clients Monitor
+====================
+
+Oznaczenia:
+ID          identyfikator przypadku
+Priorytet   krytyczny / wysoki / średni
+Rola        admin lub uzytkownik
+Warunek     co musi być przygotowane
+Kroki       co zrobić
+Oczekiwane  jaki ma być wynik
+
+
+PT-01  Logowanie admina
+Priorytet: krytyczny
+Rola: admin
+Warunek: aplikacja działa, .env ma ADMIN_PASSWORD_HASH
+Kroki:
+1. Otwórz /login.
+2. Wpisz login admin i poprawne hasło.
+3. Zatwierdź.
+Oczekiwane: przejście na listę klientów, w nagłówku widać admin.
+
+
+PT-02  Logowanie użytkownika
+Priorytet: krytyczny
+Rola: uzytkownik
+Warunek: w .env jest USER_PASSWORD_HASH
+Kroki:
+1. Wyloguj się.
+2. Zaloguj jako uzytkownik.
+Oczekiwane: wejście na listę. Brak przycisków Dodaj, Zapisz, Usuń,
+Backup, Odśwież statusy i Wyczyść historię.
+
+
+PT-03  Złe hasło
+Priorytet: krytyczny
+Rola: dowolna
+Kroki:
+1. Na /login wpisz admin i złe hasło.
+2. Powtórz 5 razy.
+Oczekiwane: komunikat o złym loginie lub haśle.
+Po 5 próbach blokada na 5 minut. W logu widać nieudane logowanie.
+
+
+PT-04  Nowa karta wymaga logowania
+Priorytet: wysoki
+Rola: admin
+Kroki:
+1. Zaloguj się w jednej karcie.
+2. Otwórz nową kartę na ten sam adres.
+Oczekiwane: nowa karta pokazuje logowanie, mimo że pierwsza jest zalogowana.
+
+
+PT-05  Użytkownik nie może zmieniać danych
+Priorytet: krytyczny
+Rola: uzytkownik
+Kroki:
+1. Zaloguj się jako uzytkownik.
+2. Wejdź na /, /history i /overnight.
+3. Spróbuj wywołać POST /add albo /delete (np. z narzędzi deweloperskich).
+Oczekiwane: brak formularzy zmian w UI.
+Ręczne POST kończy się przekierowaniem z komunikatem braku uprawnień.
+
+
+PT-06  Dodanie klienta
+Priorytet: krytyczny
+Rola: admin
+Kroki:
+1. Na liście wpisz nowe ID i poprawny IPv4.
+2. Kliknij Dodaj.
+Oczekiwane: klient pojawia się na liście ze statusem ok.
+Komunikat o sukcesie.
+
+
+PT-07  Odrzucenie złego IP
+Priorytet: wysoki
+Rola: admin
+Kroki:
+1. Dodaj klienta z IP abc albo 999.1.1.1.
+Oczekiwane: klient nie zostaje dodany, komunikat o błędnym IP.
+
+
+PT-08  Edycja klienta
+Priorytet: wysoki
+Rola: admin
+Kroki:
+1. Zmień ID i IP istniejącego klienta.
+2. Kliknij Zapisz.
+Oczekiwane: nowe ID i IP są na liście.
+Historia awarii tego klienta jest przypisana do nowego ID.
+
+
+PT-09  Usunięcie klienta kasuje historię
+Priorytet: krytyczny
+Rola: admin
+Warunek: klient ma wpis w historii awarii
+Kroki:
+1. Usuń klienta.
+2. Sprawdź listę, historię i raport nocny.
+Oczekiwane: klienta nie ma na liście ani w historii, ani w raporcie nocnym.
+
+
+PT-10  Odświeżenie statusów — sukces
+Priorytet: krytyczny
+Rola: admin
+Warunek: devices.json poprawny, urządzenie odpowiada
+Kroki:
+1. Kliknij Odśwież statusy albo poczekaj na cykl scheduler-a.
+2. Sprawdź linię ostatniego odświeżenia i log.
+Oczekiwane: linia jest zielona, z godziną i liczbą online/awaria.
+Klienci obecni w ARP mają status ok.
+Klienci nieobecni mają status Awaria.
+
+
+PT-11  Błąd odczytu nie zmienia statusów
+Priorytet: krytyczny
+Rola: admin
+Warunek: type=ssh albo telnet, urządzenie niedostępne
+Kroki:
+1. Ustaw zły host albo wyłącz urządzenie.
+2. Uruchom odświeżenie.
+Oczekiwane: odświeżenie anulowane.
+Statusy klientów bez zmian.
+Linia ostatniego odświeżenia jest czerwona.
+W logu jest przyczyna.
+
+
+PT-12  type=local
+Priorytet: wysoki
+Rola: admin
+Warunek: devices.json ma type=local
+Kroki:
+1. Uruchom odświeżenie.
+2. Sprawdź log.
+Oczekiwane: w logu widać ping klientów, potem liczbę adresów ARP
+i liczbę dopasowanych klientów.
+Statusy wynikają z lokalnego ARP.
+
+
+PT-13  type=none jest pomijany
+Priorytet: średni
+Rola: admin
+Kroki:
+1. Ustaw urządzenie jako type=none.
+2. Uruchom odświeżenie.
+Oczekiwane: w logu informacja, że urządzenie pominięto.
+Odświeżenie nie jest przerywane z tego powodu.
+
+
+PT-14  Awarie na górze listy
+Priorytet: wysoki
+Rola: dowolna
+Warunek: są klienci ok i error
+Kroki:
+1. Otwórz listę klientów.
+2. Poczekaj na auto-odświeżenie.
+Oczekiwane: klienci ze statusem Awaria są nad klientami OK.
+W każdej grupie sortowanie po ID.
+
+
+PT-15  Otwarcie i zamknięcie awarii
+Priorytet: krytyczny
+Rola: admin
+Kroki:
+1. Klient online przechodzi w offline (znika z ARP).
+2. Sprawdź status i historię.
+3. Przywróć klienta do ARP i odśwież.
+Oczekiwane: przy zejściu powstaje jeden otwarty wpis historii.
+Przy powrocie wpis dostaje ended_at, status wraca na ok.
+Nie ma dwóch otwartych awarii dla tego samego klienta.
+
+
+PT-16  Historia — filtry
+Priorytet: wysoki
+Rola: dowolna
+Kroki:
+1. Wejdź na /history.
+2. Filtruj po ID, zakresie dat i „Tylko otwarte”.
+3. Wyczyść filtry.
+Oczekiwane: lista zawęża się zgodnie z filtrem.
+Pusty wynik pokazuje komunikat o braku wpisów.
+
+
+PT-17  Raport nocny
+Priorytet: wysoki
+Rola: dowolna
+Warunek: jest awaria przecinająca się z 17:00–09:00
+oraz awaria tylko dzienna
+Kroki:
+1. Otwórz /overnight.
+2. Ustaw zakres dat obejmujący obie awarie.
+Oczekiwane: w raporcie jest tylko awaria nocna.
+Awaria wyłącznie dzienna nie wchodzi.
+
+
+PT-18  Eksport CSV historii
+Priorytet: wysoki
+Rola: dowolna
+Kroki:
+1. Na historii ustaw filtr.
+2. Kliknij Eksport CSV.
+Oczekiwane: pobiera się plik CSV.
+Nagłówki: ID Klienta, Start, Koniec, Czas trwania.
+Zawartość odpowiada aktualnemu filtrowi.
+Na stronie głównej nie ma eksportu listy klientów.
+
+
+PT-19  Eksport CSV raportu nocnego
+Priorytet: wysoki
+Rola: dowolna
+Kroki:
+1. Na raporcie nocnym kliknij Eksport CSV.
+Oczekiwane: plik zawiera tylko awarie z raportu nocnego.
+
+
+PT-20  Backup
+Priorytet: wysoki
+Rola: admin
+Kroki:
+1. Kliknij Backup teraz.
+2. Sprawdź katalog backups/.
+Oczekiwane: powstaje nowy plik clients_*.sqlite3.
+Starsze niż 14 kopii są usuwane przy kolejnych backupach.
+
+
+PT-21  Czyszczenie starych awarii
+Priorytet: średni
+Rola: admin
+Kroki:
+1. Kliknij Wyczyść stare awarie i potwierdź.
+Oczekiwane: usuwane są zamknięte awarie starsze niż 90 dni.
+Otwarte awarie zostają.
+
+
+PT-22  Wyczyszczenie całej historii
+Priorytet: wysoki
+Rola: admin
+Kroki:
+1. Na historii albo raporcie kliknij Wyczyść historię.
+2. Potwierdź.
+Oczekiwane: historia i raport nocny są puste.
+Lista klientów zostaje.
+
+
+PT-23  Motyw
+Priorytet: średni
+Rola: dowolna
+Kroki:
+1. Włącz tryb ciemny.
+2. Wejdź na login, listę, historię i raport.
+3. Odśwież stronę.
+Oczekiwane: ciemny motyw jest na wszystkich tych stronach
+i zostaje po odświeżeniu. Przełącznik ma ikonę, nie emotkę.
+
+
+PT-24  Ostatnie odświeżenie
+Priorytet: wysoki
+Rola: dowolna
+Kroki:
+1. Uruchom aplikację i wejdź na listę.
+2. Poczekaj na cykl albo odśwież statusy.
+Oczekiwane: pod podsumowaniem widać godzinę ostatniego odświeżenia,
+wynik i liczby online/awaria.
+Po błędzie odczytu linia jest czerwona.
+
+
+PT-25  Brak devices.json
+Priorytet: krytyczny
+Rola: admin
+Kroki:
+1. Zmień nazwę devices.json.
+2. Zrestartuj aplikację albo odśwież statusy.
+Oczekiwane: odświeżenie anulowane.
+W logu komunikat o braku devices.json.
+Statusy klientów bez zmian.
+
+
+PT-26  CSRF
+Priorytet: wysoki
+Rola: admin
+Kroki:
+1. Wyślij POST /delete bez tokenu albo ze złym tokenem.
+Oczekiwane: operacja odrzucona, klient nie zostaje usunięty.
+
+
+PT-27  Wylogowanie
+Priorytet: wysoki
+Rola: dowolna
+Kroki:
+1. Kliknij Wyloguj.
+2. Spróbuj wejść na /.
+Oczekiwane: sesja znika, / przekierowuje na logowanie.
